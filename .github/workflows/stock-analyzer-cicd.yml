@@ -1,0 +1,122 @@
+name: stock-analyzer-cicd.yml
+
+on:
+  push:
+    branches:
+      - main
+      - test
+
+# 한 번에 하나만 실행(같은 브랜치 기준)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  PROJECT_NAME: "stock-analyzer" # 서비스/컨테이너 베이스 이름
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Docker 빌드환경 설정
+        uses: docker/setup-buildx-action@v3
+
+      - name: DockerHub 로그인
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ hashFiles('Dockerfile') }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Docker 이미지 빌드 및 푸시
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.PROJECT_NAME }}:${{ github.ref_name }}
+          # 이미지 안에 빌드 메타정보(선택)
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_TIME=${{ github.run_id }}
+          cache-to: type=inline
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 원격 서버 배포
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT }}
+          script: |
+            set -e
+
+            echo "배포 변수 설정..."
+            export PATH=$PATH:/usr/local/bin
+            PW=${{ secrets.SERVER_PASSWORD }}
+            BRANCH=${{ github.ref_name }}
+            PROJECT=${{ env.PROJECT_NAME }}
+            IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/${{ env.PROJECT_NAME }}:${BRANCH}
+            PORT=8090
+            CONTAINER_NAME="${PROJECT}"
+            WORKDIR="/opt/${PROJECT}/${BRANCH}"
+
+            echo "브랜치: ${BRANCH}"
+            echo "이미지:  ${IMAGE}"
+            echo "컨테이너: ${CONTAINER_NAME}"
+            echo "포트:    ${PORT}"
+
+            echo "도커 이미지 풀..."
+            echo $PW | sudo -S docker pull "${IMAGE}"
+
+            echo "포트 ${PORT}를 점유한 기존 컨테이너 정리..."
+            EXISTING=$(sudo docker ps -a --filter "publish=${PORT}" --format "{{.Names}}")
+            if [ -n "$EXISTING" ]; then
+              for c in $EXISTING; do
+                echo "컨테이너 ${c} 중지/삭제"
+                echo $PW | sudo -S docker rm -f "$c"
+              done
+            fi
+
+            echo "작업 디렉터리 준비..."
+            echo $PW | sudo -S mkdir -p "${WORKDIR}"
+
+            echo "옵션: ENV 파일 구성(있다면)..."
+            ENV_FILE_CONTENT="${{ secrets.ENV_FILE }}"
+            ENV_OPT=""
+            if [ -n "${ENV_FILE_CONTENT}" ]; then
+              echo "${ENV_FILE_CONTENT}" | sudo tee "${WORKDIR}/.env" > /dev/null
+              ENV_OPT="--env-file ${WORKDIR}/.env"
+              echo "ENV 파일 적용: ${WORKDIR}/.env"
+            else
+              echo "ENV_FILE 시크릿이 없어 --env-file 생략"
+            fi
+
+            echo "컨테이너 실행..."
+            echo $PW | sudo -S docker run -d \
+              -p ${PORT}:8080 \
+              --name "${CONTAINER_NAME}" \
+              -e TZ=Asia/Seoul \
+              -e PORT=8080 \
+              -v /etc/localtime:/etc/localtime:ro \
+              ${ENV_OPT} \
+              "${IMAGE}"
+            
+            echo "dangling(<none>) 이미지 정리..."
+            echo $PW | sudo -S docker image prune -af
+
+            echo "배포 완료: ${IMAGE} -> ${CONTAINER_NAME} (host:${PORT} -> container:8080)"
