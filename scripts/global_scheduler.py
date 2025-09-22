@@ -22,6 +22,7 @@ sys.path.append(str(Path(__file__).parent.parent / "app"))
 
 from app.ml.global_ml_engine import GlobalMLEngine, MarketRegion
 from app.services.smart_alert_system import SmartAlertSystem
+from app.utils.market_time_utils import MarketTimeManager
 from app.config.settings import settings
 
 
@@ -31,6 +32,7 @@ class GlobalScheduler:
     def __init__(self):
         self.ml_engine = GlobalMLEngine()
         self.alert_system = SmartAlertSystem()
+        self.market_time_manager = MarketTimeManager()
         
         # 시간대 설정
         self.kr_timezone = pytz.timezone('Asia/Seoul')
@@ -42,7 +44,7 @@ class GlobalScheduler:
         
         print("🌍 글로벌 스케줄링 시스템 초기화")
         self._setup_signal_handlers()
-        self._setup_schedules()
+        self._setup_dynamic_schedules()
     
     def _setup_signal_handlers(self):
         """시그널 핸들러 설정"""
@@ -54,49 +56,60 @@ class GlobalScheduler:
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
     
-    def _setup_schedules(self):
-        """스케줄 설정"""
-        print("⏰ 글로벌 스케줄 설정 중...")
+    def _setup_dynamic_schedules(self):
+        """동적 스케줄 설정 (MarketTimeManager 활용)"""
+        print("⏰ 동적 글로벌 스케줄 설정 중...")
         
-        # 1. 한국 시장 관련 스케줄
-        # 매일 16:00 - 한국 시장 마감 후 분석 및 알림
+        # MarketTimeManager로 현재 시장 시간 정보 가져오기
+        schedule_info = self.market_time_manager.get_market_schedule_info()
+        dst_status = self.market_time_manager.format_dst_status()
+        
+        print(f"🌞 {dst_status}")
+        
+        # 미국 시장 시간을 한국 시간으로 변환 (MarketTimeManager 활용)
+        us_times = self.market_time_manager.get_us_market_times_in_kr()
+        
+        # 1. 한국 시장 관련 스케줄 (고정)
         schedule.every().day.at("16:00").do(self._run_korean_market_analysis).tag("kr_market")
         
-        # 2. 미국 시장 관련 스케줄  
-        # 매일 06:00 - 미국 프리마켓 알림 (장 시작 30분 전)
-        schedule.every().day.at("06:00").do(self._run_us_premarket_alert).tag("us_premarket")
+        # 2. 미국 시장 관련 스케줄 (동적)
+        premarket_time = us_times['premarket_start_kr']
+        market_open_time = us_times['regular_start_kr']
+        market_analysis_time = us_times['regular_end_kr_analysis']  # 마감 30분 후
+        data_collection_time = us_times['aftermarket_end_kr']       # 애프터마켓 30분 후
         
-        # 매일 06:30 - 미국 시장 마감 후 분석 (한국시간 새벽, 미국 현지 마감 후)
-        schedule.every().day.at("06:30").do(self._run_us_market_analysis).tag("us_market")
+        schedule.every().day.at(premarket_time).do(self._run_us_premarket_alert).tag("us_premarket")
+        schedule.every().day.at(market_open_time).do(self._run_us_market_open_alert).tag("us_market_open")
+        schedule.every().day.at(market_analysis_time).do(self._run_us_market_analysis).tag("us_market")
         
         # 3. 데이터 수집 스케줄
-        # 매일 07:00 - 미국 데이터 수집 (시장 마감 후)
-        schedule.every().day.at("07:00").do(self._collect_us_data).tag("us_data")
-        
-        # 매일 17:00 - 한국 데이터 수집 (시장 마감 후)  
+        schedule.every().day.at(data_collection_time).do(self._collect_us_data).tag("us_data")
         schedule.every().day.at("17:00").do(self._collect_korean_data).tag("kr_data")
         
         # 4. ML 모델 재학습 스케줄
-        # 매주 토요일 02:00 - 주간 모델 재학습
         schedule.every().saturday.at("02:00").do(self._run_weekly_ml_training).tag("ml_training")
-        
-        # 매월 1일 03:00 - 월간 모델 재학습 (더 깊은 학습)
         schedule.every().month.do(self._run_monthly_ml_training).tag("ml_monthly")
         
         # 5. 시스템 헬스체크
-        # 매시간 정각 - 시스템 상태 체크
         schedule.every().hour.at(":00").do(self._health_check).tag("health")
         
         # 6. 긴급 알림 체크
-        # 4시간마다 - 하락장 경고 등 긴급 알림 체크
         schedule.every(4).hours.do(self._check_emergency_alerts).tag("emergency")
         
-        print("✅ 스케줄 설정 완료:")
-        print("   📈 한국 시장 분석: 매일 16:00")
-        print("   🇺🇸 미국 프리마켓: 매일 06:00") 
-        print("   📊 미국 시장 분석: 매일 06:30")
-        print("   🤖 ML 재학습: 매주 토요일 02:00")
-        print("   🚨 긴급 알림: 4시간마다")
+        print("✅ 동적 스케줄 설정 완료:")
+        print(f"   📈 한국 시장 분석: 매일 16:00")
+        print(f"   🇺🇸 미국 프리마켓: 매일 {premarket_time} (ET 04:00)")
+        print(f"   🇺🇸 미국 정규장 시작: 매일 {market_open_time} (ET 09:30)")
+        print(f"   📊 미국 시장 분석: 매일 {market_analysis_time} (ET 16:30)")
+        print(f"   📁 미국 데이터 수집: 매일 {data_collection_time} (ET 20:30)")
+        print(f"   🤖 ML 재학습: 매주 토요일 02:00")
+        print(f"   🚨 긴급 알림: 4시간마다")
+        print(f"   ⏰ {dst_status}")
+    
+    def _setup_schedules(self):
+        """레거시 스케줄 설정 (호환성을 위해 유지)"""
+        print("⚠️ 레거시 스케줄 메서드 호출됨 - _setup_dynamic_schedules 사용 권장")
+        self._setup_dynamic_schedules()
     
     async def _run_korean_market_analysis(self):
         """한국 시장 분석 실행"""
@@ -131,8 +144,8 @@ class GlobalScheduler:
             return False
     
     async def _run_us_premarket_alert(self):
-        """미국 프리마켓 알림 실행"""
-        print("\n🌅 미국 프리마켓 알림 시작 (06:00)")
+        """미국 프리마켓 알림 실행 (한국시간 17:00 = 미국 04:00 ET)"""
+        print("\n🌅 미국 프리마켓 알림 시작 (17:00)")
         print("="*50)
         
         try:
@@ -153,9 +166,32 @@ class GlobalScheduler:
             print(f"❌ 프리마켓 알림 실패: {e}")
             return False
     
+    async def _run_us_market_open_alert(self):
+        """미국 정규장 시작 알림 실행 (한국시간 22:30 = 미국 09:30 ET)"""
+        print("\n🇺🇸 미국 정규장 시작 알림 (22:30)")
+        print("="*50)
+        
+        try:
+            # 정규장 시작 알림 생성 및 전송  
+            market_open_alert = self.alert_system.generate_market_open_alert("US")
+            if market_open_alert:
+                success = await self.alert_system.send_alert(market_open_alert)
+                if success:
+                    print("✅ 정규장 시작 알림 전송 완료")
+                else:
+                    print("❌ 정규장 시작 알림 전송 실패")
+            else:
+                print("⚠️ 정규장 시작 알림 생성 실패")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ 정규장 시작 알림 실패: {e}")
+            return False
+    
     async def _run_us_market_analysis(self):
-        """미국 시장 분석 실행"""
-        print("\n🇺🇸 미국 시장 분석 시작 (06:30)")
+        """미국 시장 분석 실행 (한국시간 05:30 = 미국 16:30 ET, 마감 30분 후)"""
+        print("\n🇺🇸 미국 시장 분석 시작 (05:30)")
         print("="*50)
         
         try:
@@ -323,14 +359,72 @@ class GlobalScheduler:
         self._health_check()
         
         print("\n⏰ 예정된 작업:")
+        current_time = datetime.now(self.kr_timezone)
+        jobs_info = []
+        
         for job in schedule.jobs:
-            print(f"   • {job.tags}: {job.next_run}")
+            next_run = job.next_run
+            if next_run:
+                # 다음 실행까지 남은 시간 계산
+                time_until = next_run - current_time.replace(tzinfo=None)
+                hours_until = int(time_until.total_seconds() / 3600)
+                
+                # 작업 이름 정리
+                tag_names = {
+                    'kr_market': '🇰🇷 한국 시장 분석',
+                    'us_premarket': '🇺🇸 미국 프리마켓',
+                    'us_market_open': '🇺🇸 미국 정규장 시작',
+                    'us_market': '🇺🇸 미국 시장 분석',
+                    'kr_data': '📊 한국 데이터 수집',
+                    'us_data': '📊 미국 데이터 수집',
+                    'ml_training': '🤖 ML 주간 학습',
+                    'ml_monthly': '🤖 ML 월간 학습',
+                    'health': '🏥 헬스체크',
+                    'emergency': '🚨 긴급 알림 체크'
+                }
+                
+                tag = list(job.tags)[0] if job.tags else 'unknown'
+                task_name = tag_names.get(tag, tag)
+                
+                jobs_info.append((hours_until, task_name, next_run.strftime('%Y-%m-%d %H:%M')))
+        
+        # 가장 가까운 작업 순으로 정렬
+        jobs_info.sort(key=lambda x: x[0])
+        
+        for hours_until, task_name, next_run_str in jobs_info[:5]:  # 가장 가까운 5개만 표시
+            if hours_until < 24:
+                print(f"   • {task_name}: {next_run_str} ({hours_until}시간 후)")
+            else:
+                days_until = hours_until // 24
+                print(f"   • {task_name}: {next_run_str} ({days_until}일 후)")
+        
+        if len(jobs_info) > 5:
+            print(f"   ... 외 {len(jobs_info) - 5}개 작업")
+        
+        # 서머타임 전환 추적용 변수
+        self.last_dst_status = self._is_dst_active()
         
         print("\n🔄 스케줄러 대기 중... (Ctrl+C로 종료)")
         
         # 메인 스케줄러 루프
         while self.is_running:
             try:
+                # 서머타임 전환 감지 및 스케줄 재설정
+                current_dst_status = self._is_dst_active()
+                if current_dst_status != self.last_dst_status:
+                    print(f"\n🔄 서머타임 전환 감지!")
+                    print(f"   {self.last_dst_status} → {current_dst_status}")
+                    print("   스케줄 재설정 중...")
+                    
+                    # 기존 스케줄 삭제
+                    schedule.clear()
+                    
+                    # 새로운 시간대로 스케줄 재설정
+                    self._setup_dynamic_schedules()
+                    
+                    self.last_dst_status = current_dst_status
+                    print("✅ 서머타임 전환에 따른 스케줄 재설정 완료")
+                
                 # 예정된 작업 실행
                 schedule.run_pending()
                 
@@ -356,6 +450,7 @@ class GlobalScheduler:
         tasks = {
             "korean_analysis": self._run_korean_market_analysis,
             "us_premarket": self._run_us_premarket_alert,
+            "us_market_open": self._run_us_market_open_alert,
             "us_analysis": self._run_us_market_analysis,
             "korean_data": self._collect_korean_data,
             "us_data": self._collect_us_data,

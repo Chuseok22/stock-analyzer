@@ -526,7 +526,11 @@ def start_health_server():
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
                 self.wfile.write(json.dumps(response).encode())
-                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 헬스체크 요청 처리됨")
+                # 헬스체크 로그는 5분마다만 출력
+                current_time = time.time()
+                if not hasattr(self.server, 'last_health_log') or current_time - self.server.last_health_log > 300:
+                    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 헬스체크 서버 정상 동작 중")
+                    self.server.last_health_log = current_time
             else:
                 self.send_response(404)
                 self.end_headers()

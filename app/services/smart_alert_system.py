@@ -22,6 +22,7 @@ from app.database.connection import get_db_session
 from app.models.entities import StockMaster, MarketRegion
 from app.ml.global_ml_engine import GlobalMLEngine, MarketRegime, GlobalPrediction
 from app.services.notification import NotificationService
+from app.utils.market_time_utils import MarketTimeManager
 from app.config.settings import settings
 
 
@@ -64,6 +65,7 @@ class SmartAlertSystem:
     def __init__(self):
         self.ml_engine = GlobalMLEngine()
         self.notification_service = NotificationService()
+        self.market_time_manager = MarketTimeManager()
         
         # 시간대 설정
         self.kr_timezone = pytz.timezone('Asia/Seoul')
@@ -113,8 +115,20 @@ class SmartAlertSystem:
                 print("   ⚠️ 미국 예측 데이터 없음")
                 return None
             
+            # 시장 시간 정보 가져오기
+            market_schedule = self.market_time_manager.get_market_schedule_info()
+            dst_status = self.market_time_manager.format_dst_status()
+            
             # 알림 메시지 구성
             title = "🇺🇸 미국 프리마켓 추천 종목 (장 시작 30분 전)"
+            
+            # 시장 운영 시간 정보 추가
+            time_info = f"🕐 **오늘 미국 시장 운영 시간**\n"
+            time_info += f"📅 {market_schedule['today_date']}\n"
+            time_info += f"🌍 {dst_status}\n"
+            time_info += f"• 프리마켓: {market_schedule['premarket']['us_time']} (현지) / {market_schedule['premarket']['kr_time']} (한국)\n"
+            time_info += f"• 정규장: {market_schedule['regular']['us_time']} (현지) / {market_schedule['regular']['kr_time']} (한국)\n"
+            time_info += f"• 애프터마켓: {market_schedule['aftermarket']['us_time']} (현지) / {market_schedule['aftermarket']['kr_time']} (한국)\n\n"
             
             # 시장 상황 요약
             regime_emoji = {
@@ -133,14 +147,15 @@ class SmartAlertSystem:
                 MarketRegime.CRISIS_MODE: "위기상황"
             }
             
-            market_summary = f"{regime_emoji.get(market_condition.regime, '📊')} 시장 체제: {regime_name.get(market_condition.regime, '분석중')}\n"
-            market_summary += f"📈 변동성: {market_condition.volatility_level:.1%}\n"
-            market_summary += f"😰 공포/탐욕: {market_condition.fear_greed_index:.0f}/100\n"
-            market_summary += f"⚠️ 리스크: {market_condition.risk_level}\n\n"
+            market_summary = f"{regime_emoji.get(market_condition.regime, '📊')} **시장 체제 분석**\n"
+            market_summary += f"• 현재 체제: {regime_name.get(market_condition.regime, '분석중')}\n"
+            market_summary += f"• 변동성: {market_condition.volatility_level:.1%}\n"
+            market_summary += f"• 공포/탐욕: {market_condition.fear_greed_index:.0f}/100\n"
+            market_summary += f"• 리스크: {market_condition.risk_level}\n\n"
             
             # 추천 종목 정보
             stock_info = []
-            message_lines = [market_summary, "🎯 **오늘의 추천 종목**"]
+            message_lines = [time_info, market_summary, "🎯 **오늘의 추천 종목**"]
             
             for i, pred in enumerate(us_predictions[:5], 1):
                 # 추천 등급 이모지
@@ -194,7 +209,7 @@ class SmartAlertSystem:
                 ])
             else:
                 recommendations.extend([
-                    "💡 미국 시장 개장 전 30분입니다",
+                    f"💡 미국 시장 개장까지 약 30분 남았습니다",
                     "📈 프리마켓 동향을 확인하세요",
                     "🎯 계획된 진입점을 준수하세요"
                 ])
@@ -259,7 +274,27 @@ class SmartAlertSystem:
             
             severity_level = "위험" if market_condition.regime == MarketRegime.BEAR_MARKET else "심각"
             
+            # 시장 시간 정보 추가
+            market_schedule = self.market_time_manager.get_market_schedule_info()
+            current_status = self.market_time_manager.get_current_market_status()
+            
+            time_info = f"⏰ **현재 시장 상황**\n"
+            time_info += f"📅 {market_schedule['today_date']}\n"
+            time_info += f"🔄 현재 상태: {current_status['status']}\n"
+            
+            if current_status['status'] == '정규장':
+                time_info += f"⚠️ 현재 거래 시간 중입니다 - 즉시 대응 필요\n"
+            elif current_status['status'] == '프리마켓':
+                time_info += f"📈 프리마켓 시간 - 정규장 전 대응 준비\n"
+            elif current_status['status'] == '애프터마켓':
+                time_info += f"📉 애프터마켓 - 다음 거래일 대응 계획 수립\n"
+            else:
+                time_info += f"🛑 시장 마감 - 다음 거래일 대응 준비\n"
+            
+            time_info += f"• 다음 정규장: {market_schedule['regular']['us_time']} (미국) / {market_schedule['regular']['kr_time']} (한국)\n\n"
+            
             message = f"⚠️ **{severity_level}한 시장 상황이 감지되었습니다**\n\n"
+            message += time_info
             
             message += f"📊 **시장 분석 결과**\n"
             message += f"• 시장 체제: {market_condition.regime.value}\n"
@@ -341,12 +376,33 @@ class SmartAlertSystem:
             max_return = max(predictions, key=lambda x: x.predicted_return)
             min_return = min(predictions, key=lambda x: x.predicted_return)
             
-            # 제목
+            # 제목 및 시장 정보
             market_name = "한국" if region == MarketRegion.KR else "미국"
             title = f"📊 {market_name} 시장 마감 후 분석 요약"
             
+            # 내일 시장 시간 정보 (미국 시장용)
+            time_info = ""
+            if region == MarketRegion.US:
+                tomorrow_schedule = self.market_time_manager.get_market_schedule_info(days_offset=1)
+                dst_status = self.market_time_manager.format_dst_status()
+                
+                time_info = f"🕐 **내일 미국 시장 운영 시간**\n"
+                time_info += f"📅 {tomorrow_schedule['today_date']}\n"
+                time_info += f"🌍 {dst_status}\n"
+                time_info += f"• 프리마켓: {tomorrow_schedule['premarket']['us_time']} (현지) / {tomorrow_schedule['premarket']['kr_time']} (한국)\n"
+                time_info += f"• 정규장: {tomorrow_schedule['regular']['us_time']} (현지) / {tomorrow_schedule['regular']['kr_time']} (한국)\n"
+                time_info += f"• 애프터마켓: {tomorrow_schedule['aftermarket']['us_time']} (현지) / {tomorrow_schedule['aftermarket']['kr_time']} (한국)\n\n"
+            elif region == MarketRegion.KR:
+                # 한국 시장은 고정 시간이므로 간단히 표시
+                time_info = f"🕐 **내일 한국 시장 운영 시간**\n"
+                time_info += f"• 정규장: 09:00 - 15:30 (한국시간)\n"
+                time_info += f"• 동시호가: 08:30 - 09:00, 15:30 - 16:00\n\n"
+            
             # 메시지 구성
             message = f"🏁 **{market_name} 시장 분석 완료**\n\n"
+            
+            if time_info:
+                message += time_info
             
             message += f"📈 **시장 전망 요약**\n"
             message += f"• 전체 분석 종목: {total_stocks}개\n"
