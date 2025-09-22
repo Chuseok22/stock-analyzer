@@ -1,4 +1,4 @@
-name: stock-analyzer-cicd.yml
+name: Stock Analyzer CI/CD Pipeline
 
 on:
   push:
@@ -54,6 +54,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
     steps:
       - name: 원격 서버 배포
         uses: appleboy/ssh-action@v1.0.3
@@ -65,7 +66,7 @@ jobs:
           script: |
             set -e
 
-            echo "배포 변수 설정..."
+            echo "=== Stock Analyzer 배포 시작 ==="
             export PATH=$PATH:/usr/local/bin
             PW=${{ secrets.SERVER_PASSWORD }}
             BRANCH=${{ github.ref_name }}
@@ -74,49 +75,57 @@ jobs:
             PORT=8090
             CONTAINER_NAME="${PROJECT}"
             WORKDIR="/opt/${PROJECT}/${BRANCH}"
+            DATA_DIR="/volume1/project/stock-analyzer/data"
+            LOG_DIR="/volume1/project/stock-analyzer/logs"
 
             echo "브랜치: ${BRANCH}"
             echo "이미지:  ${IMAGE}"
             echo "컨테이너: ${CONTAINER_NAME}"
             echo "포트:    ${PORT}"
+            echo "작업디렉터리: ${WORKDIR}"
 
-            echo "도커 이미지 풀..."
+            echo "=== 도커 이미지 풀 ==="
             echo $PW | sudo -S docker pull "${IMAGE}"
 
-            echo "포트 ${PORT}를 점유한 기존 컨테이너 정리..."
-            EXISTING=$(sudo docker ps -a --filter "publish=${PORT}" --format "{{.Names}}")
+            echo "=== 기존 컨테이너 정리 ==="
+            EXISTING=$(sudo docker ps -a --filter "name=${CONTAINER_NAME}" --format "{{.Names}}")
             if [ -n "$EXISTING" ]; then
-              for c in $EXISTING; do
-                echo "컨테이너 ${c} 중지/삭제"
-                echo $PW | sudo -S docker rm -f "$c"
-              done
+              echo "기존 컨테이너 ${EXISTING} 중지/삭제"
+              echo $PW | sudo -S docker rm -f "$EXISTING"
             fi
 
-            echo "작업 디렉터리 준비..."
+            echo "=== 디렉터리 구조 준비 ==="
             echo $PW | sudo -S mkdir -p "${WORKDIR}"
+            echo $PW | sudo -S mkdir -p "${DATA_DIR}"
+            echo $PW | sudo -S mkdir -p "${LOG_DIR}"
 
-            echo "옵션: ENV 파일 구성(있다면)..."
-            ENV_FILE_CONTENT="${{ secrets.ENV_FILE }}"
-            ENV_OPT=""
-            if [ -n "${ENV_FILE_CONTENT}" ]; then
-              echo "${ENV_FILE_CONTENT}" | sudo tee "${WORKDIR}/.env" > /dev/null
-              ENV_OPT="--env-file ${WORKDIR}/.env"
-              echo "ENV 파일 적용: ${WORKDIR}/.env"
-            else
-              echo "ENV_FILE 시크릿이 없어 --env-file 생략"
-            fi
+            echo "=== 환경 파일 구성 ==="
+            # GitHub Secret에서 .env 파일 내용을 가져와서 생성
+            echo '${{ secrets.ENV_FILE }}' | sudo tee "${WORKDIR}/.env" > /dev/null
 
-            echo "컨테이너 실행..."
+            echo "=== 단순 컨테이너 실행 ==="
             echo $PW | sudo -S docker run -d \
-              -p ${PORT}:8080 \
               --name "${CONTAINER_NAME}" \
+              -p ${PORT}:8080 \
               -e TZ=Asia/Seoul \
               -e PORT=8080 \
+              --env-file "${WORKDIR}/.env" \
+              -v ${DATA_DIR}:/app/data \
+              -v ${LOG_DIR}:/app/logs \
               -v /etc/localtime:/etc/localtime:ro \
-              ${ENV_OPT} \
+              --restart unless-stopped \
               "${IMAGE}"
             
-            echo "dangling(<none>) 이미지 정리..."
+            echo "=== 서비스 상태 확인 ==="
+            sleep 10
+            echo $PW | sudo -S docker ps --filter "name=${CONTAINER_NAME}"
+            echo $PW | sudo -S docker logs --tail=20 "${CONTAINER_NAME}"
+            
+            echo "=== dangling 이미지 정리 ==="
             echo $PW | sudo -S docker image prune -af
 
-            echo "배포 완료: ${IMAGE} -> ${CONTAINER_NAME} (host:${PORT} -> container:8080)"
+            echo "=== 배포 완료 ==="
+            echo "Stock Analyzer가 포트 ${PORT}에서 실행 중입니다."
+            echo "Health Check: http://SERVER_IP:${PORT}/health"
+            echo "데이터 디렉터리: ${DATA_DIR}"
+            echo "로그 디렉터리: ${LOG_DIR}"
