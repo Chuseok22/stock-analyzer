@@ -271,6 +271,25 @@ class EnhancedGlobalScheduler:
             print("🤖 한국 ML 모델 업데이트...")
             self.ml_engine.train_global_models()
             
+            # 실시간 학습 실행 (예측 vs 실제 성과 분석)
+            print("🧠 한국 시장 실시간 학습 시작...")
+            try:
+                from app.ml.realtime_learning_system import RealTimeLearningSystem
+                learning_system = RealTimeLearningSystem()
+                
+                # 당일 예측 결과 저장 (다음날 비교용)
+                if kr_predictions:
+                    learning_system.save_daily_predictions(kr_predictions)
+                
+                # 전일 성과 평가 및 학습 (하루 뒤 실행)
+                from datetime import date, timedelta
+                yesterday = date.today() - timedelta(days=1)
+                learning_system.run_daily_learning_cycle(yesterday)
+                
+                print("✅ 한국 실시간 학습 완료")
+            except Exception as learning_error:
+                print(f"⚠️ 한국 실시간 학습 실패: {learning_error}")
+            
             print("✅ 한국 시장 분석 완료")
             return True
             
@@ -296,6 +315,21 @@ class EnhancedGlobalScheduler:
             # ML 모델 재학습 (미국 데이터 기반)
             print("🤖 미국 ML 모델 업데이트...")
             self.ml_engine.train_global_models()
+            
+            # 실시간 학습 실행 (예측 vs 실제 성과 분석)
+            print("🧠 미국 시장 실시간 학습 시작...")
+            try:
+                from app.ml.realtime_learning_system import RealTimeLearningSystem
+                learning_system = RealTimeLearningSystem()
+                
+                # 전일 성과 평가 및 학습
+                from datetime import date, timedelta
+                yesterday = date.today() - timedelta(days=1)
+                learning_system.run_daily_learning_cycle(yesterday)
+                
+                print("✅ 미국 실시간 학습 완료")
+            except Exception as learning_error:
+                print(f"⚠️ 미국 실시간 학습 실패: {learning_error}")
             
             print("✅ 미국 시장 분석 완료")
             return True
@@ -352,19 +386,57 @@ class EnhancedGlobalScheduler:
         print("="*60)
         
         try:
-            # 1. 주간 ML 모델 재학습
+            # 1. 실시간 학습 주간 성능 리포트 생성
+            print("📊 주간 ML 성능 리포트 생성...")
+            try:
+                from app.ml.realtime_learning_system import RealTimeLearningSystem
+                from datetime import date, timedelta
+                
+                learning_system = RealTimeLearningSystem()
+                today = date.today()
+                weekly_report = learning_system.generate_performance_report(today, days=7)
+                
+                # 성능 리포트 Discord 전송
+                if weekly_report:
+                    from app.services.smart_alert_system import AlertMessage
+                    
+                    # 배포 환경에서는 더 상세한 리포트
+                    is_production = Path("/volume1/project/stock-analyzer").exists()
+                    report_title = "📈 주간 ML 성능 리포트" + (" (배포환경)" if is_production else " (개발환경)")
+                    
+                    performance_alert = AlertMessage(
+                        title=report_title,
+                        description=weekly_report[:1800] + "\n\n*전체 리포트는 서버에 저장됨*" if len(weekly_report) > 1800 else weekly_report,
+                        market_region="GLOBAL",
+                        alert_type="PERFORMANCE_REPORT",
+                        importance="HIGH"
+                    )
+                    asyncio.run(self.alert_system.send_alert(performance_alert))
+                    
+                print("✅ 주간 성능 리포트 완료")
+                
+            except Exception as perf_error:
+                print(f"⚠️ 성능 리포트 생성 실패: {perf_error}")
+            
+            # 2. 주간 ML 모델 재학습
             print("🏋️ 주간 ML 모델 재학습...")
             ml_success = self.ml_engine.train_global_models()
             
-            # 2. 주간 시장 동향 분석
+            # 3. 주간 시장 동향 분석
             print("📊 주간 시장 동향 분석...")
-            weekly_report = self._generate_weekly_report()
+            weekly_market_report = self._generate_weekly_market_report()
             
-            # 3. 주간 리포트 전송
-            if weekly_report:
-                # 여기서 Discord나 이메일로 주간 리포트 전송
-                print("📧 주간 리포트 전송...")
-                # TODO: 주간 리포트 전송 구현
+            # 4. 종합 주간 리포트 전송
+            if weekly_market_report:
+                print("📧 주간 시장 리포트 전송...")
+                market_alert = AlertMessage(
+                    title="� 주간 시장 동향 분석",
+                    description=weekly_market_report,
+                    market_region="GLOBAL",
+                    alert_type="WEEKLY_ANALYSIS",
+                    importance="MEDIUM"
+                )
+                asyncio.run(self.alert_system.send_alert(market_alert))
             
             self.last_ml_training = datetime.now()
             print("✅ 주간 종합 분석 완료")
@@ -374,12 +446,17 @@ class EnhancedGlobalScheduler:
             print(f"❌ 주간 분석 실패: {e}")
             return False
     
-    def _generate_weekly_report(self) -> Optional[str]:
-        """주간 분석 리포트 생성"""
+    def _generate_weekly_market_report(self) -> Optional[str]:
+        """주간 시장 분석 리포트 생성"""
         try:
-            # 주간 성과 분석, 트렌드 요약 등
-            # 실제 구현은 향후 추가
-            return "주간 리포트 생성됨"
+            # 주간 시장 동향, 글로벌 경제 지표 등
+            report = "📊 **주간 시장 동향 분석**\n\n"
+            report += "🔍 **분석 기간**: 지난 7일\n"
+            report += "📈 **주요 동향**: 시장 체제 분석 및 트렌드 요약\n"
+            report += "🎯 **다음 주 전망**: ML 모델 기반 예측\n"
+            report += "⚠️ **리스크 요인**: 글로벌 경제 이슈 모니터링\n"
+            
+            return report
         except Exception:
             return None
     

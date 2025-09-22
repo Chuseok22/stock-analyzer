@@ -220,6 +220,12 @@ class GlobalStockAnalysisSystem:
             print("🇺🇸 미국 주식 예측...")
             us_predictions = ml_engine.predict_stocks(MarketRegion.US, top_n=10)
             
+            # 실시간 학습을 위한 예측 결과 저장
+            print("💾 학습용 예측 결과 저장...")
+            all_predictions = kr_predictions + us_predictions
+            if all_predictions:
+                ml_engine.save_predictions_for_learning(all_predictions)
+            
             results = {
                 "market_condition": {
                     "regime": market_condition.regime.value,

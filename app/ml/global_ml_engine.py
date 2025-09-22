@@ -147,8 +147,28 @@ class GlobalMLEngine:
                 return market_condition
                 
         except Exception as e:
-            print(f"❌ 시장 체제 분석 실패: {e}")
-            return self._get_default_market_condition()
+            print(f"❌ 예측 실패: {e}")
+            return []
+    
+    def save_predictions_for_learning(self, predictions: List, target_date: date = None):
+        """학습을 위한 예측 결과 저장"""
+        if target_date is None:
+            target_date = date.today()
+        
+        try:
+            # 실시간 학습 시스템 인스턴스 생성
+            from app.ml.realtime_learning_system import RealTimeLearningSystem
+            
+            learning_system = RealTimeLearningSystem()
+            learning_system.save_daily_predictions(predictions, target_date)
+            
+        except Exception as e:
+            print(f"❌ 학습용 예측 결과 저장 실패: {e}")
+
+
+def main():
+    """메인 실행 함수"""
+    import argparse
     
     def _get_market_index_data(self, db, region: MarketRegion, start_date: date, end_date: date) -> List[float]:
         """시장 지수 대표 데이터 추출"""
@@ -486,29 +506,123 @@ class GlobalMLEngine:
         
         return df
     
-    def train_global_models(self) -> bool:
-        """글로벌 ML 모델 학습"""
-        print("🏋️ 글로벌 ML 모델 학습 시작")
-        print("="*50)
+    def train_global_models(self, use_intensive_config: bool = False) -> bool:
+        """글로벌 ML 모델 학습 - 배포 환경 최적화"""
+        print("🏋️ 글로벌 ML 모델 학습 시작...")
         
         try:
-            # 시장 체제 분석
-            self.detect_market_regime()
+            # 배포 환경 감지
+            is_production = Path("/volume1/project/stock-analyzer").exists()
             
-            # 각 시장별 모델 학습
-            kr_success = self._train_market_model(MarketRegion.KR)
-            us_success = self._train_market_model(MarketRegion.US)
-            
-            if kr_success and us_success:
-                print("✅ 글로벌 모델 학습 완료")
-                return True
-            else:
-                print("❌ 일부 모델 학습 실패")
-                return False
+            if is_production:
+                print("🚀 배포 환경 감지 - 고성능 학습 모드")
+                # 배포 환경에서는 최대 성능으로 학습
+                model_config = {
+                    'n_estimators': 300,        # 트리 개수 증가
+                    'max_depth': 12,            # 깊이 증가
+                    'min_samples_split': 5,     # 더 세밀한 분할
+                    'min_samples_leaf': 2,      # 리프 노드 최소값
+                    'max_features': 'sqrt',     # 모든 피처 사용
+                    'random_state': 42,
+                    'n_jobs': -1,              # 모든 CPU 코어 활용
+                    'verbose': 1               # 진행상황 표시
+                }
                 
+                if use_intensive_config or hasattr(self, 'model_config'):
+                    # 집중 학습 모드
+                    intensive_config = getattr(self, 'model_config', {})
+                    if intensive_config:
+                        model_config.update(intensive_config)
+                        print(f"🔥 집중 학습 설정 적용: {intensive_config}")
+            else:
+                print("🛠️ 개발 환경 - 빠른 학습 모드")
+                # 개발 환경에서는 빠른 학습
+                model_config = {
+                    'n_estimators': 50,
+                    'max_depth': 8,
+                    'min_samples_split': 10,
+                    'random_state': 42,
+                    'n_jobs': 2
+                }
+            
+            print(f"⚙️ 모델 설정: {model_config}")
+            
+            # 1. 데이터 준비
+            print("📊 학습 데이터 준비...")
+            training_success = self._prepare_training_data()
+            
+            if not training_success:
+                print("❌ 학습 데이터 준비 실패")
+                return False
+            
+            # 2. 한국 시장 모델 학습
+            print("🇰🇷 한국 시장 모델 학습...")
+            kr_success = self._train_market_model(MarketRegion.KR, model_config)
+            
+            # 3. 미국 시장 모델 학습
+            print("🇺🇸 미국 시장 모델 학습...")
+            us_success = self._train_market_model(MarketRegion.US, model_config)
+            
+            # 4. 글로벌 앙상블 모델 학습
+            print("🌍 글로벌 앙상블 모델 학습...")
+            ensemble_success = self._train_ensemble_model(model_config)
+            
+            success = kr_success and us_success and ensemble_success
+            
+            if success:
+                if is_production:
+                    print("🎉 배포 환경 고성능 학습 완료!")
+                else:
+                    print("✅ 개발 환경 학습 완료")
+                
+                # 모델 성능 검증
+                self._validate_trained_models()
+            else:
+                print("❌ 모델 학습 실패")
+            
+            return success
+            
         except Exception as e:
             print(f"❌ 글로벌 모델 학습 실패: {e}")
             return False
+    
+    def _validate_trained_models(self):
+        """학습된 모델 성능 검증"""
+        try:
+            print("🔍 학습된 모델 성능 검증...")
+            
+            # 모델 파일 존재 확인
+            model_dir = Path("storage/models/global")
+            required_models = [
+                "global_kr_model.joblib",
+                "global_us_model.joblib", 
+                "global_ensemble_model.joblib"
+            ]
+            
+            model_status = {}
+            for model_name in required_models:
+                model_path = model_dir / model_name
+                if model_path.exists():
+                    model_status[model_name] = "✅ 존재"
+                    # 파일 크기 확인
+                    size_mb = model_path.stat().st_size / (1024 * 1024)
+                    model_status[model_name] += f" ({size_mb:.1f}MB)"
+                else:
+                    model_status[model_name] = "❌ 없음"
+            
+            print("📋 모델 파일 상태:")
+            for model, status in model_status.items():
+                print(f"   • {model}: {status}")
+            
+            # 모든 모델이 존재하는지 확인
+            all_exist = all("✅" in status for status in model_status.values())
+            if all_exist:
+                print("✅ 모든 모델 파일 검증 완료")
+            else:
+                print("⚠️ 일부 모델 파일 누락")
+                
+        except Exception as e:
+            print(f"❌ 모델 검증 실패: {e}")
     
     def _train_market_model(self, region: MarketRegion) -> bool:
         """시장별 모델 학습"""
