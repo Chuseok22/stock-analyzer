@@ -36,6 +36,7 @@ joblib==1.4.2
 sqlalchemy==2.0.35
 psycopg==3.2.3
 alembic==1.13.3
+redis==5.2.1
 
 # Financial data and API
 yfinance==0.2.48
