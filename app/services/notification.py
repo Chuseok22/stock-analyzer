@@ -413,15 +413,47 @@ class NotificationService:
     return message
 
   def _send_simple_slack_message(self, message: str) -> bool:
-    """Send simple text message to Slack."""
+    """Send simple text message to Slack or Discord (depending on enabled settings)."""
+    # Try Discord first if enabled
+    if settings.discord_enabled and settings.discord_webhook_url:
+      if self._send_simple_discord_message(message):
+        return True
+    
+    # Fallback to Slack if enabled
+    if settings.slack_enabled and self.slack_client:
+      try:
+        response = self.slack_client.chat_postMessage(
+            channel=settings.slack_channel,
+            text=message
+        )
+        return response["ok"]
+      except Exception as e:
+        logger.error(f"Simple Slack message failed: {e}")
+    
+    return False
+
+  def _send_simple_discord_message(self, message: str) -> bool:
+    """Send simple text message to Discord."""
     try:
-      response = self.slack_client.chat_postMessage(
-          channel=settings.slack_channel,
-          text=message
+      import urllib3
+      urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+      
+      payload = {
+        "content": message
+      }
+      
+      response = requests.post(
+        settings.discord_webhook_url,
+        json=payload,
+        headers={"Content-Type": "application/json"},
+        timeout=10,
+        verify=False  # Skip SSL verification for development
       )
-      return response["ok"]
+      
+      return response.status_code == 204
+        
     except Exception as e:
-      logger.error(f"Simple Slack message failed: {e}")
+      logger.error(f"Simple Discord message failed: {e}")
       return False
 
   def _send_simple_telegram_message(self, message: str) -> bool:

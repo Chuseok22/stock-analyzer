@@ -17,14 +17,14 @@ class Settings(BaseSettings):
   db_password: str
 
   # KIS API settings
-  kis_app_key: Optional[str]
-  kis_app_secret: Optional[str]
+  kis_app_key: str
+  kis_app_secret: str
   kis_base_url: str
 
   # Redis settings
   redis_host: str
   redis_port: int
-  redis_password: Optional[str]
+  redis_password: str
   redis_db: int
 
   # ML Model settings
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
   log_file: str
 
   # Scheduling settings
-  default_universe_id: Optional[int]
+  default_universe_id: int
   default_region: str
   universe_size: int
   daily_recommendation_count: int
@@ -47,24 +47,24 @@ class Settings(BaseSettings):
   smtp_host: str
   smtp_port: int
   smtp_use_tls: bool
-  smtp_username: Optional[str]
-  smtp_password: Optional[str]
-  smtp_from_email: Optional[str]
-  notification_email: Optional[str]
+  smtp_username: str
+  smtp_password: str
+  smtp_from_email: str
+  notification_email: str
 
   # Slack notification settings
   slack_enabled: bool
-  slack_token: Optional[str]
+  slack_token: str
   slack_channel: str
 
   # Discord notification settings
   discord_enabled: bool
-  discord_webhook_url: Optional[str]
+  discord_webhook_url: str
 
   # Telegram notification settings
   telegram_enabled: bool
-  telegram_bot_token: Optional[str]
-  telegram_chat_id: Optional[str]
+  telegram_bot_token: str
+  telegram_chat_id: str
 
   class Config:
     env_file = ".env"
