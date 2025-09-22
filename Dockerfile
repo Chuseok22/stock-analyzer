@@ -107,5 +107,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1
 
-# 기본 실행 명령어 (GitHub Actions에서 override 가능)
+# 기본 실행 명령어 (인수 없이 실행 시 스케줄러 모드)
 CMD ["python", "run_global_system.py"]
