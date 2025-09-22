@@ -1,0 +1,33 @@
+[Unit]
+Description=Stock Analyzer Server - AI-powered stock recommendation system
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=stockanalyzer
+Group=stockanalyzer
+WorkingDirectory=/opt/stock-analyzer
+Environment=PYTHONPATH=/opt/stock-analyzer
+ExecStart=/opt/stock-analyzer/venv/bin/python /opt/stock-analyzer/server.py --daemon
+ExecStop=/bin/kill -TERM $MAINPID
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=stock-analyzer
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/stock-analyzer/logs /opt/stock-analyzer/models /opt/stock-analyzer/features /opt/stock-analyzer/cache
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=2G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

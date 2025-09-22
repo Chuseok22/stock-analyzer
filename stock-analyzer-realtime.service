@@ -1,0 +1,15 @@
+[Unit]
+Description=Stock Analyzer Realtime Learning System
+After=network.target
+
+[Service]
+Type=simple
+User=dojes
+WorkingDirectory=/Users/dojes/Documents/synology/code/stock-analyzer
+Environment=PYTHONPATH=/Users/dojes/Documents/synology/code/stock-analyzer
+ExecStart=/Users/dojes/Documents/synology/code/stock-analyzer/venv/bin/python app/ml/realtime_learning_system.py --full
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target
