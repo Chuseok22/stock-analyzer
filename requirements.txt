@@ -34,7 +34,6 @@ joblib==1.4.2
 
 # Database connections
 sqlalchemy==2.0.35
-psycopg==3.2.3
 psycopg2-binary==2.9.9
 alembic==1.13.3
 redis==5.2.1
