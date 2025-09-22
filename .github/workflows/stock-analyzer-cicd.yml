@@ -88,7 +88,7 @@ jobs:
             echo $PW | sudo -S docker pull "${IMAGE}"
 
             echo "=== 기존 컨테이너 정리 ==="
-            EXISTING=$(sudo docker ps -a --filter "name=${CONTAINER_NAME}" --format "{{.Names}}")
+            EXISTING=$(echo $PW | sudo -S docker ps -a --filter "name=${CONTAINER_NAME}" --format "{{.Names}}")
             if [ -n "$EXISTING" ]; then
               echo "기존 컨테이너 ${EXISTING} 중지/삭제"
               echo $PW | sudo -S docker rm -f "$EXISTING"
