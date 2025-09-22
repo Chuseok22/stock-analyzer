@@ -1,15 +1,54 @@
-.idea
-venv
+# ======================================
+# 민감한 정보 및 환경 설정 파일들
+# ======================================
+.env
 .env.*
+*.env
+*secrets*
+*config*secret*
+GitHub_Secrets_Guide.md
 
-# 프로젝트 특화 무시 파일들
-storage/logs/*.log
-storage/models/*.pkl
-storage/data/*.csv
-storage/data/*.json
+# ======================================
+# 프로젝트별 데이터 및 로그 파일들
+# ======================================
+# 로그 파일들
+logs/
+storage/logs/
+*.log
+*.log.*
+
+# ML 모델 및 데이터 파일들
+storage/models/
+storage/data/
+storage/features/
+storage/analysis_reports/
+data/
+models/
+*.pkl
+*.joblib
+*.h5
+*.csv
+*.json
+*.jsonl
+
+# 임시 파일들
 *.tmp
 *.backup
+*.bak
 cleanup_project.sh
+
+# ======================================
+# 개발 환경 관련 파일들
+# ======================================
+.idea/
+.vscode/settings.json
+.vscode/launch.json
+.DS_Store
+Thumbs.db
+
+# ======================================
+# Python 관련 파일들
+# ======================================
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

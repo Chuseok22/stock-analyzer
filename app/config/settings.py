@@ -69,6 +69,40 @@ class Settings(BaseSettings):
   telegram_bot_token: str
   telegram_chat_id: str
 
+  # Application configuration
+  app_name: str = "stock-analyzer"
+  app_version: str = "1.0.0"
+  debug: bool = False
+  port: int = 8080
+
+  # ML Model advanced settings
+  ml_model_retrain_days: int = 7
+  ml_prediction_threshold: float = 0.6
+  ml_top_recommendations: int = 10
+
+  # Data collection settings
+  data_collection_stocks: int = 30
+  data_collection_days: int = 60
+  api_rate_limit_delay: float = 0.1
+
+  # Backtest settings
+  backtest_default_days: int = 30
+  backtest_min_accuracy: float = 0.55
+
+  # Real-time learning settings
+  realtime_learning_enabled: bool = True
+  performance_tracking_days: int = 30
+  auto_model_backup: bool = True
+  learning_strategy_threshold: float = 55.0
+
+  # Timezone configuration
+  tz: str = "Asia/Seoul"
+
+  # Security settings
+  secret_key: str = "your_secret_key_here"
+  jwt_secret_key: str = "your_jwt_secret_key_here"
+  encryption_key: str = "your_encryption_key_here"
+
   class Config:
     env_file = ".env"
     env_file_encoding = "utf-8"

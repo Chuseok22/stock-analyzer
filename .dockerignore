@@ -1,14 +1,123 @@
+# ======================================
+# Git 관련 파일들 (Docker 이미지에 불필요)
+# ======================================
 .git
-__pycache__/
-*.pyc
-*.pyo
-*.log
+.gitignore
+.gitattributes
+.github/
+
+# ======================================
+# 민감한 정보 및 환경 설정 파일들
+# ======================================
 .env
-.venv
-venv/
-dist/
-build/
-.mypy_cache/
-.pytest_cache/
+.env.*
+*.env
+*secrets*
+*config*secret*
+GitHub_Secrets_Guide.md
+
+# ======================================
+# 개발 환경 관련 파일들
+# ======================================
 .idea/
 .vscode/
+.DS_Store
+Thumbs.db
+*.iml
+
+# ======================================
+# Python 관련 파일들
+# ======================================
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# 가상환경
+venv/
+.venv/
+env/
+ENV/
+
+# ======================================
+# 로그 및 데이터 파일들 (런타임에 생성)
+# ======================================
+logs/
+storage/logs/
+*.log
+*.log.*
+
+# ML 모델 및 데이터 (필요시 별도 볼륨 마운트)
+storage/models/
+storage/data/
+storage/features/
+storage/analysis_reports/
+data/
+models/
+*.pkl
+*.joblib
+*.h5
+
+# 대용량 데이터 파일들
+*.csv
+*.json
+*.jsonl
+*.parquet
+*.sqlite
+*.db
+
+# ======================================
+# 문서 및 불필요한 파일들
+# ======================================
+README.md
+CHANGELOG.md
+LICENSE
+*.md
+docs/
+examples/
+
+# 임시 파일들
+*.tmp
+*.backup
+*.bak
+*.swp
+*.swo
+*~
+
+# ======================================
+# 테스트 관련 파일들
+# ======================================
+test_*.py
+*_test.py
+tests/
+.pytest_cache/
+htmlcov/
+
+# ======================================
+# 스크립트 파일들 (필요시 선별적으로 포함)
+# ======================================
+scripts/env_validator.py
+scripts/production_security_check.py
+cleanup_project.sh
+
+# ======================================
+# 기타 불필요한 파일들
+# ======================================
+# Node.js (만약 사용한다면)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS 생성 파일들
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

@@ -31,6 +31,7 @@ sys.path.append(str(Path(__file__).parent.parent / "app"))
 
 from app.ml.global_ml_engine import GlobalMLEngine, MarketRegion
 from app.services.smart_alert_system import SmartAlertSystem
+from app.utils.structured_logger import get_logger
 from app.config.settings import settings
 
 
@@ -40,18 +41,28 @@ class EnhancedGlobalScheduler:
     def __init__(self):
         self.ml_engine = GlobalMLEngine()
         self.alert_system = SmartAlertSystem()
+        self.logger = get_logger("global_scheduler")
+        
+        # 프로젝트 루트 경로
+        self.project_root = Path(__file__).parent.parent
         
         # 시간대 설정
-        self.kr_timezone = pytz.timezone('Asia/Seoul')
-        self.us_timezone = pytz.timezone('America/New_York')
+        self.kst = pytz.timezone('Asia/Seoul')
+        self.us_timezone = pytz.timezone('US/Eastern')
         
-        # 실행 상태 추적
-        self.is_running = False
+        # 마지막 ML 학습 시간
         self.last_ml_training = None
         
-        print("🌍 향상된 글로벌 스케줄링 시스템 초기화")
-        self._setup_signal_handlers()
-        self._setup_dynamic_schedules()
+        # 종료 플래그
+        self.should_stop = False
+        
+        self.logger.info("향상된 글로벌 스케줄링 시스템 초기화 완료")
+        self.logger.log_system_status({
+            "component": "global_scheduler",
+            "status": "initialized",
+            "timezone": "Asia/Seoul",
+            "dst_active": self.is_dst_active()
+        })
     
     def _setup_signal_handlers(self):
         """시그널 핸들러 설정"""

@@ -21,6 +21,7 @@ from app.models.entities import (
     StockMaster, StockDailyPrice, MarketRegion
 )
 from app.ml.global_ml_engine import GlobalMLEngine
+from app.utils.structured_logger import get_logger
 
 
 @dataclass
@@ -56,6 +57,7 @@ class RealTimeLearningSystem:
     
     def __init__(self):
         self.ml_engine = GlobalMLEngine()
+        self.logger = get_logger("realtime_learning")
         
         # 배포 환경 볼륨 매핑 경로 (/volume1/project/stock-analyzer)
         self.base_volume_path = Path("/volume1/project/stock-analyzer")
@@ -63,9 +65,9 @@ class RealTimeLearningSystem:
         # 로컬 개발 환경 대체 경로
         if not self.base_volume_path.exists():
             self.base_volume_path = Path("storage")
-            print("⚠️ 개발 환경: 로컬 storage 사용")
+            self.logger.info("개발 환경: 로컬 storage 사용")
         else:
-            print(f"✅ 배포 환경: 볼륨 매핑 경로 사용 - {self.base_volume_path}")
+            self.logger.info(f"배포 환경: 볼륨 매핑 경로 사용 - {self.base_volume_path}")
         
         # 분석 리포트 저장 구조 설정
         self.reports_base = self.base_volume_path / "analysis_reports"
@@ -75,9 +77,17 @@ class RealTimeLearningSystem:
         self.reports_base.mkdir(parents=True, exist_ok=True)
         self.performance_dir.mkdir(parents=True, exist_ok=True)
         
-        print("🧠 실시간 ML 학습 시스템 초기화")
-        print(f"📁 리포트 저장 경로: {self.reports_base}")
-        print(f"📊 성능 데이터 경로: {self.performance_dir}")
+        self.logger.info("실시간 ML 학습 시스템 초기화 완료")
+        self.logger.info(f"리포트 저장 경로: {self.reports_base}")
+        self.logger.info(f"성능 데이터 경로: {self.performance_dir}")
+        
+        # 시스템 상태 로깅
+        self.logger.log_system_status({
+            "component": "realtime_learning_system",
+            "status": "initialized",
+            "reports_path": str(self.reports_base),
+            "performance_path": str(self.performance_dir)
+        })
     
     def _get_report_path(self, target_date: date, report_type: str = "daily") -> Path:
         """연/월/주 구조로 리포트 경로 생성"""
@@ -99,7 +109,7 @@ class RealTimeLearningSystem:
     
     def save_daily_predictions(self, predictions: List, target_date: date) -> bool:
         """당일 예측 결과 저장"""
-        print(f"💾 {target_date} 예측 결과 저장 중...")
+        self.logger.info(f"{target_date} 예측 결과 저장 시작...")
         
         try:
             prediction_file = self.performance_dir / f"predictions_{target_date.strftime('%Y%m%d')}.json"
@@ -122,16 +132,26 @@ class RealTimeLearningSystem:
             with open(prediction_file, 'w', encoding='utf-8') as f:
                 json.dump(prediction_data, f, ensure_ascii=False, indent=2)
             
-            print(f"✅ {len(prediction_data)}개 예측 결과 저장 완료")
+            self.logger.info(f"{len(prediction_data)}개 예측 결과 저장 완료")
+            
+            # 시장별 예측 개수 로깅
+            market_counts = {}
+            for pred in predictions:
+                market = pred.market_region
+                market_counts[market] = market_counts.get(market, 0) + 1
+            
+            for market, count in market_counts.items():
+                self.logger.log_prediction_result(market, prediction_data, accuracy=None)
+            
             return True
             
         except Exception as e:
-            print(f"❌ 예측 결과 저장 실패: {e}")
+            self.logger.error(f"예측 결과 저장 실패: {e}")
             return False
     
     def calculate_actual_returns(self, target_date: date) -> Dict[str, float]:
         """당일 실제 수익률 계산"""
-        print(f"📊 {target_date} 실제 수익률 계산 중...")
+        self.logger.info(f"{target_date} 실제 수익률 계산 시작...")
         
         actual_returns = {}
         
@@ -179,23 +199,25 @@ class RealTimeLearningSystem:
                             key = f"{stock.market_region}_{stock.stock_code}"
                             actual_returns[key] = actual_return
                 
-            print(f"✅ {len(actual_returns)}개 종목 실제 수익률 계산 완료")
+            self.logger.info(f"{len(actual_returns)}개 종목 실제 수익률 계산 완료")
+            self.logger.debug(f"이전 거래일: {prev_date}, 당일: {target_date}")
+            
             return actual_returns
             
         except Exception as e:
-            print(f"❌ 실제 수익률 계산 실패: {e}")
+            self.logger.error(f"실제 수익률 계산 실패: {e}")
             return {}
     
     def evaluate_daily_performance(self, target_date: date) -> Optional[ModelPerformance]:
         """당일 모델 성능 평가"""
-        print(f"📈 {target_date} 모델 성능 평가 중...")
+        self.logger.info(f"{target_date} 모델 성능 평가 시작...")
         
         try:
             # 예측 결과 로드
             prediction_file = self.performance_dir / f"predictions_{target_date.strftime('%Y%m%d')}.json"
             
             if not prediction_file.exists():
-                print(f"⚠️ {target_date} 예측 파일 없음")
+                self.logger.warning(f"{target_date} 예측 파일 없음")
                 return None
             
             with open(prediction_file, 'r', encoding='utf-8') as f:
@@ -205,7 +227,7 @@ class RealTimeLearningSystem:
             actual_returns = self.calculate_actual_returns(target_date)
             
             if not actual_returns:
-                print(f"⚠️ {target_date} 실제 수익률 데이터 없음")
+                self.logger.warning(f"{target_date} 실제 수익률 데이터 없음")
                 return None
             
             # 한국/미국 시장별 성능 평가
@@ -275,10 +297,18 @@ class RealTimeLearningSystem:
                         top5_accuracy=top5_accuracy
                     )
                     
-                    print(f"   📊 {region} 성능:")
-                    print(f"      정확도: {accuracy_rate:.1f}%")
-                    print(f"      평균 오차: {avg_error:.2f}%")
-                    print(f"      상위5 정확도: {top5_accuracy:.1f}%")
+                    self.logger.info(f"{region} 시장 성능 평가 완료")
+                    self.logger.info(f"  정확도: {accuracy_rate:.1f}%, 평균 오차: {avg_error:.2f}%, 상위5 정확도: {top5_accuracy:.1f}%")
+                    
+                    # 성능 로그 기록
+                    self.logger.log_performance({
+                        "type": "daily_evaluation",
+                        "market": region,
+                        "accuracy_rate": accuracy_rate,
+                        "avg_error": avg_error,
+                        "top5_accuracy": top5_accuracy,
+                        "total_predictions": total_predictions
+                    })
             
             # 성능 결과 저장
             self._save_performance_results(performances, target_date)
@@ -286,7 +316,7 @@ class RealTimeLearningSystem:
             return performances
             
         except Exception as e:
-            print(f"❌ 성능 평가 실패: {e}")
+            self.logger.error(f"성능 평가 실패: {e}")
             return None
     
     def _save_performance_results(self, performances: Dict[str, ModelPerformance], target_date: date):
