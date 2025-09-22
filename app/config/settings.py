@@ -21,6 +21,9 @@ class Settings(BaseSettings):
   kis_app_secret: str
   kis_base_url: str
 
+  # Alpha Vantage API settings (US stock data)
+  alpha_vantage_api_key: str = ""
+
   # Redis settings
   redis_host: str
   redis_port: int
