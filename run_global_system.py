@@ -444,7 +444,7 @@ def main():
     )
     
     # 실행 모드 설정
-    group = parser.add_mutually_exclusive_group(required=True)
+    group = parser.add_mutually_exclusive_group(required=False)  # required=False로 변경
     group.add_argument("--setup", action="store_true", help="시스템 초기 설정")
     group.add_argument("--collect-data", action="store_true", help="데이터 수집")
     group.add_argument("--train-models", action="store_true", help="ML 모델 학습")
@@ -455,6 +455,12 @@ def main():
     group.add_argument("--status", action="store_true", help="시스템 상태")
     
     args = parser.parse_args()
+    
+    # 인수가 없으면 기본적으로 스케줄러 실행
+    if not any([args.setup, args.collect_data, args.train_models, args.predict, 
+                args.alerts, args.schedule, args.full, args.status]):
+        logger.info("🚀 기본 모드: 스케줄러 실행")
+        args.schedule = True
     
     # 시스템 초기화
     system = GlobalStockAnalysisSystem()
@@ -509,30 +515,43 @@ def start_health_server():
     class HealthHandler(BaseHTTPRequestHandler):
         def do_GET(self):
             if self.path == '/health':
-                response = {"status": "healthy", "timestamp": time.time()}
+                response = {
+                    "status": "healthy", 
+                    "timestamp": time.time(),
+                    "service": "stock-analyzer",
+                    "version": "2.0"
+                }
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
                 self.wfile.write(json.dumps(response).encode())
+                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 헬스체크 요청 처리됨")
             else:
                 self.send_response(404)
                 self.end_headers()
         
         def log_message(self, format, *args):
-            pass  # 로그 억제
+            pass  # HTTP 로그 억제
     
     def run_server():
         try:
             port = int(os.getenv('PORT', 8080))
             server = HTTPServer(('0.0.0.0', port), HealthHandler)
+            print(f"🏥 헬스체크 서버 시작됨 - http://0.0.0.0:{port}/health")
             logger.info(f"🏥 헬스체크 서버 시작 - 포트 {port}")
             server.serve_forever()
         except Exception as e:
+            print(f"❌ 헬스체크 서버 오류: {e}")
             logger.error(f"헬스체크 서버 오류: {e}")
     
     # 백그라운드에서 헬스체크 서버 실행
     health_thread = threading.Thread(target=run_server, daemon=True)
     health_thread.start()
+    
+    # 서버 시작 대기
+    time.sleep(2)
+    
     return health_thread
 
 
