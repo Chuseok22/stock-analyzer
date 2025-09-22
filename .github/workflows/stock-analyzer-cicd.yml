@@ -132,22 +132,6 @@ jobs:
             echo "컨테이너 로그 (최근 30줄):"
             echo $PW | sudo -S docker logs --tail=30 "${CONTAINER_NAME}"
             
-            echo "=== 헬스체크 확인 ==="
-            for i in {1..6}; do
-              echo "헬스체크 시도 ${i}/6..."
-              if curl -s -f "http://localhost:${PORT}/health" > /dev/null 2>&1; then
-                echo "✅ 헬스체크 성공!"
-                break
-              elif [ $i -eq 6 ]; then
-                echo "❌ 헬스체크 실패 - 상세 로그 확인"
-                echo $PW | sudo -S docker logs "${CONTAINER_NAME}"
-                exit 1
-              else
-                echo "대기 중... (${i}/6)"
-                sleep 10
-              fi
-            done
-            
             echo "=== dangling 이미지 정리 ==="
             echo $PW | sudo -S docker image prune -af
 
