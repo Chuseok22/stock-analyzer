@@ -10,8 +10,8 @@ from decimal import Decimal
 from typing import List, Dict, Any, Optional
 import json
 
-# Add app directory to path
-sys.path.append(str(Path(__file__).parent / "app"))
+# Add app directory to path  
+sys.path.append(str(Path(__file__).parent.parent / "app"))
 
 from app.database.connection import get_db_session
 from app.models.entities import (

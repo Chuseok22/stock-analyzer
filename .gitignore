@@ -2,6 +2,15 @@
 venv
 .env.*
 
+# 프로젝트 특화 무시 파일들
+storage/logs/*.log
+storage/models/*.pkl
+storage/data/*.csv
+storage/data/*.json
+*.tmp
+*.backup
+cleanup_project.sh
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

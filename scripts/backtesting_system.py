@@ -13,7 +13,7 @@ import numpy as np
 from typing import Dict, List
 
 # Add app directory to path
-sys.path.append(str(Path(__file__).parent / "app"))
+sys.path.append(str(Path(__file__).parent.parent / "app"))
 
 from app.database.connection import get_db_session
 from app.services.notification import NotificationService

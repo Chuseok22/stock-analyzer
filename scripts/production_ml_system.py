@@ -15,7 +15,7 @@ from typing import Dict, List, Tuple, Optional
 import pickle
 
 # Add app directory to path
-sys.path.append(str(Path(__file__).parent / "app"))
+sys.path.append(str(Path(__file__).parent.parent / "app"))
 
 from app.database.connection import get_db_session
 from app.models.entities import StockRecommendation, StockMaster
@@ -31,7 +31,7 @@ class ProductionMLSystem:
         self.universe_id = 1
         self.kis_client = KISAPIClient()
         self.notification = NotificationService()
-        self.model_dir = Path(__file__).parent / "models"
+        self.model_dir = Path(__file__).parent.parent / "storage" / "models"
         self.model_dir.mkdir(exist_ok=True)
         
         # 시장 지수 종목 코드 (하락장 판단용)

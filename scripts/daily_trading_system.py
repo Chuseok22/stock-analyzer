@@ -15,18 +15,21 @@ import time as time_module
 import logging
 
 # Add app directory to path
-sys.path.append(str(Path(__file__).parent / "app"))
+sys.path.append(str(Path(__file__).parent.parent / "app"))
 
 from production_ml_system import ProductionMLSystem
 from app.services.kis_api import KISAPIClient
 
 
 # 로깅 설정
+log_dir = Path(__file__).parent.parent / "storage" / "logs"
+log_dir.mkdir(parents=True, exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('daily_trading_system.log'),
+        logging.FileHandler(log_dir / 'daily_trading_system.log'),
         logging.StreamHandler()
     ]
 )
@@ -60,8 +63,10 @@ class DailyTradingSystem:
         logger.info("📊 일일 데이터 수집 시작")
         
         try:
-            # 기존 데이터 수집 스크립트 실행
-            os.system("python collect_enhanced_data.py")
+            # 현재 스크립트와 같은 디렉토리의 collect_enhanced_data.py 실행
+            script_dir = Path(__file__).parent
+            collect_script = script_dir / "collect_enhanced_data.py"
+            os.system(f"cd {script_dir.parent} && python {collect_script}")
             logger.info("✅ 일일 데이터 수집 완료")
             
         except Exception as e:
@@ -72,8 +77,10 @@ class DailyTradingSystem:
         logger.info("🤖 ML 분석 및 추천 생성 시작")
         
         try:
-            # production_ml_system.py 실행
-            os.system("python production_ml_system.py")
+            # 현재 스크립트와 같은 디렉토리의 production_ml_system.py 실행
+            script_dir = Path(__file__).parent
+            ml_script = script_dir / "production_ml_system.py"
+            os.system(f"cd {script_dir.parent} && python {ml_script}")
             logger.info("✅ ML 분석 완료")
             
         except Exception as e:
