@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 
 from app.config.settings import settings
 from app.database.redis_client import redis_client
+from app.utils.api_utils import APIUtils, AlphaVantageAPIUtils
+from app.utils.data_utils import DataValidationUtils, DateUtils
 
 logger = logging.getLogger(__name__)
 
@@ -27,57 +29,36 @@ class AlphaVantageAPIClient:
         self.base_url = "https://www.alphavantage.co/query"
         
         # Rate limiting: 5 calls per minute for free tier
-        self.rate_limit_calls = 5
-        self.rate_limit_window = 60  # seconds
+        self.rate_limiter = APIUtils.APIRateLimiter(
+            calls_per_minute=5,
+            redis_key_prefix="alpha_vantage"
+        )
         
         if not self.api_key:
             logger.warning("Alpha Vantage API key not provided")
 
-    def _check_rate_limit(self) -> bool:
-        """Check if we can make an API call within rate limits."""
-        current_time = int(time.time())
-        window_start = current_time - self.rate_limit_window
-        
-        # Get recent call timestamps
-        recent_calls = redis_client.zrangebyscore(
-            US_RATE_LIMIT_KEY, window_start, current_time
-        )
-        
-        if len(recent_calls) >= self.rate_limit_calls:
-            return False
-        
-        # Record this call
-        redis_client.zadd(US_RATE_LIMIT_KEY, {str(current_time): current_time})
-        redis_client.expire(US_RATE_LIMIT_KEY, self.rate_limit_window)
-        
-        return True
-
     def _make_request(self, params: Dict) -> Dict:
         """Make rate-limited request to Alpha Vantage API."""
-        if not self._check_rate_limit():
-            wait_time = 60
-            logger.info(f"Rate limit reached, waiting {wait_time} seconds...")
-            time.sleep(wait_time)
+        # Apply rate limiting
+        self.rate_limiter.wait_if_needed()
         
         params['apikey'] = self.api_key
         
         try:
-            response = requests.get(self.base_url, params=params)
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            # Check for API errors
-            if "Error Message" in data:
-                logger.error(f"Alpha Vantage API error: {data['Error Message']}")
-                return {}
-            
-            if "Note" in data:
-                logger.warning(f"Alpha Vantage API note: {data['Note']}")
-                return {}
-            
-            return data
-            
+            with APIUtils.create_session_with_retries() as session:
+                response = session.get(self.base_url, params=params, timeout=30)
+                response.raise_for_status()
+                
+                data = response.json()
+                
+                # Check for Alpha Vantage specific errors
+                error_msg = AlphaVantageAPIUtils.extract_error_message(data)
+                if error_msg:
+                    logger.error(f"Alpha Vantage API error: {error_msg}")
+                    return {}
+                
+                return data
+                
         except requests.exceptions.RequestException as e:
             logger.error(f"Alpha Vantage API request failed: {e}")
             return {}
@@ -93,6 +74,10 @@ class AlphaVantageAPIClient:
         Returns:
             List of daily price data
         """
+        if not DataValidationUtils.is_valid_stock_symbol(symbol):
+            logger.error(f"Invalid stock symbol: {symbol}")
+            return []
+            
         params = {
             'function': 'TIME_SERIES_DAILY_ADJUSTED',
             'symbol': symbol,
@@ -111,18 +96,27 @@ class AlphaVantageAPIClient:
             
             prices = []
             for date_str, price_data in time_series.items():
-                prices.append({
-                    'symbol': symbol,
-                    'date': date_str,
-                    'open': float(price_data['1. open']),
-                    'high': float(price_data['2. high']),
-                    'low': float(price_data['3. low']),
-                    'close': float(price_data['4. close']),
-                    'adjusted_close': float(price_data['5. adjusted close']),
-                    'volume': int(price_data['6. volume']),
-                    'dividend_amount': float(price_data['7. dividend amount']),
-                    'split_coefficient': float(price_data['8. split coefficient'])
-                })
+                # Validate date format
+                if not DataValidationUtils.is_valid_date_format(date_str):
+                    logger.warning(f"Invalid date format in response: {date_str}")
+                    continue
+                    
+                try:
+                    prices.append({
+                        'symbol': symbol,
+                        'date': date_str,
+                        'open': DataValidationUtils.safe_float(price_data['1. open']),
+                        'high': DataValidationUtils.safe_float(price_data['2. high']),
+                        'low': DataValidationUtils.safe_float(price_data['3. low']),
+                        'close': DataValidationUtils.safe_float(price_data['4. close']),
+                        'adjusted_close': DataValidationUtils.safe_float(price_data['5. adjusted close']),
+                        'volume': DataValidationUtils.safe_int(price_data['6. volume']),
+                        'dividend_amount': DataValidationUtils.safe_float(price_data['7. dividend amount']),
+                        'split_coefficient': DataValidationUtils.safe_float(price_data['8. split coefficient'])
+                    })
+                except (KeyError, ValueError) as e:
+                    logger.warning(f"Error parsing price data for {symbol} on {date_str}: {e}")
+                    continue
             
             # Sort by date (newest first)
             prices.sort(key=lambda x: x['date'], reverse=True)
@@ -136,6 +130,10 @@ class AlphaVantageAPIClient:
 
     def get_company_overview(self, symbol: str) -> Dict:
         """Get company fundamental data."""
+        if not DataValidationUtils.is_valid_stock_symbol(symbol):
+            logger.error(f"Invalid stock symbol: {symbol}")
+            return {}
+            
         params = {
             'function': 'OVERVIEW',
             'symbol': symbol
@@ -157,44 +155,44 @@ class AlphaVantageAPIClient:
                 'country': data.get('Country', 'USA'),
                 'sector': data.get('Sector', ''),
                 'industry': data.get('Industry', ''),
-                'market_cap': self._safe_float(data.get('MarketCapitalization')),
-                'pe_ratio': self._safe_float(data.get('PERatio')),
-                'peg_ratio': self._safe_float(data.get('PEGRatio')),
-                'book_value': self._safe_float(data.get('BookValue')),
-                'dividend_per_share': self._safe_float(data.get('DividendPerShare')),
-                'dividend_yield': self._safe_float(data.get('DividendYield')),
-                'eps': self._safe_float(data.get('EPS')),
-                'revenue_per_share_ttm': self._safe_float(data.get('RevenuePerShareTTM')),
-                'profit_margin': self._safe_float(data.get('ProfitMargin')),
-                'operating_margin_ttm': self._safe_float(data.get('OperatingMarginTTM')),
-                'return_on_assets_ttm': self._safe_float(data.get('ReturnOnAssetsTTM')),
-                'return_on_equity_ttm': self._safe_float(data.get('ReturnOnEquityTTM')),
-                'revenue_ttm': self._safe_float(data.get('RevenueTTM')),
-                'gross_profit_ttm': self._safe_float(data.get('GrossProfitTTM')),
-                'diluted_eps_ttm': self._safe_float(data.get('DilutedEPSTTM')),
-                'quarterly_earnings_growth_yoy': self._safe_float(data.get('QuarterlyEarningsGrowthYOY')),
-                'quarterly_revenue_growth_yoy': self._safe_float(data.get('QuarterlyRevenueGrowthYOY')),
-                'analyst_target_price': self._safe_float(data.get('AnalystTargetPrice')),
-                'trailing_pe': self._safe_float(data.get('TrailingPE')),
-                'forward_pe': self._safe_float(data.get('ForwardPE')),
-                'price_to_sales_ratio_ttm': self._safe_float(data.get('PriceToSalesRatioTTM')),
-                'price_to_book_ratio': self._safe_float(data.get('PriceToBookRatio')),
-                'ev_to_revenue': self._safe_float(data.get('EVToRevenue')),
-                'ev_to_ebitda': self._safe_float(data.get('EVToEBITDA')),
-                'beta': self._safe_float(data.get('Beta')),
-                '52_week_high': self._safe_float(data.get('52WeekHigh')),
-                '52_week_low': self._safe_float(data.get('52WeekLow')),
-                '50_day_ma': self._safe_float(data.get('50DayMovingAverage')),
-                '200_day_ma': self._safe_float(data.get('200DayMovingAverage')),
-                'shares_outstanding': self._safe_float(data.get('SharesOutstanding')),
-                'shares_float': self._safe_float(data.get('SharesFloat')),
-                'shares_short': self._safe_float(data.get('SharesShort')),
-                'shares_short_prior_month': self._safe_float(data.get('SharesShortPriorMonth')),
-                'short_ratio': self._safe_float(data.get('ShortRatio')),
-                'short_percent_outstanding': self._safe_float(data.get('ShortPercentOutstanding')),
-                'short_percent_float': self._safe_float(data.get('ShortPercentFloat')),
-                'percent_insiders': self._safe_float(data.get('PercentInsiders')),
-                'percent_institutions': self._safe_float(data.get('PercentInstitutions')),
+                'market_cap': DataValidationUtils.safe_float(data.get('MarketCapitalization')),
+                'pe_ratio': DataValidationUtils.safe_float(data.get('PERatio')),
+                'peg_ratio': DataValidationUtils.safe_float(data.get('PEGRatio')),
+                'book_value': DataValidationUtils.safe_float(data.get('BookValue')),
+                'dividend_per_share': DataValidationUtils.safe_float(data.get('DividendPerShare')),
+                'dividend_yield': DataValidationUtils.safe_float(data.get('DividendYield')),
+                'eps': DataValidationUtils.safe_float(data.get('EPS')),
+                'revenue_per_share_ttm': DataValidationUtils.safe_float(data.get('RevenuePerShareTTM')),
+                'profit_margin': DataValidationUtils.safe_float(data.get('ProfitMargin')),
+                'operating_margin_ttm': DataValidationUtils.safe_float(data.get('OperatingMarginTTM')),
+                'return_on_assets_ttm': DataValidationUtils.safe_float(data.get('ReturnOnAssetsTTM')),
+                'return_on_equity_ttm': DataValidationUtils.safe_float(data.get('ReturnOnEquityTTM')),
+                'revenue_ttm': DataValidationUtils.safe_float(data.get('RevenueTTM')),
+                'gross_profit_ttm': DataValidationUtils.safe_float(data.get('GrossProfitTTM')),
+                'diluted_eps_ttm': DataValidationUtils.safe_float(data.get('DilutedEPSTTM')),
+                'quarterly_earnings_growth_yoy': DataValidationUtils.safe_float(data.get('QuarterlyEarningsGrowthYOY')),
+                'quarterly_revenue_growth_yoy': DataValidationUtils.safe_float(data.get('QuarterlyRevenueGrowthYOY')),
+                'analyst_target_price': DataValidationUtils.safe_float(data.get('AnalystTargetPrice')),
+                'trailing_pe': DataValidationUtils.safe_float(data.get('TrailingPE')),
+                'forward_pe': DataValidationUtils.safe_float(data.get('ForwardPE')),
+                'price_to_sales_ratio_ttm': DataValidationUtils.safe_float(data.get('PriceToSalesRatioTTM')),
+                'price_to_book_ratio': DataValidationUtils.safe_float(data.get('PriceToBookRatio')),
+                'ev_to_revenue': DataValidationUtils.safe_float(data.get('EVToRevenue')),
+                'ev_to_ebitda': DataValidationUtils.safe_float(data.get('EVToEBITDA')),
+                'beta': DataValidationUtils.safe_float(data.get('Beta')),
+                '52_week_high': DataValidationUtils.safe_float(data.get('52WeekHigh')),
+                '52_week_low': DataValidationUtils.safe_float(data.get('52WeekLow')),
+                '50_day_ma': DataValidationUtils.safe_float(data.get('50DayMovingAverage')),
+                '200_day_ma': DataValidationUtils.safe_float(data.get('200DayMovingAverage')),
+                'shares_outstanding': DataValidationUtils.safe_float(data.get('SharesOutstanding')),
+                'shares_float': DataValidationUtils.safe_float(data.get('SharesFloat')),
+                'shares_short': DataValidationUtils.safe_float(data.get('SharesShort')),
+                'shares_short_prior_month': DataValidationUtils.safe_float(data.get('SharesShortPriorMonth')),
+                'short_ratio': DataValidationUtils.safe_float(data.get('ShortRatio')),
+                'short_percent_outstanding': DataValidationUtils.safe_float(data.get('ShortPercentOutstanding')),
+                'short_percent_float': DataValidationUtils.safe_float(data.get('ShortPercentFloat')),
+                'percent_insiders': DataValidationUtils.safe_float(data.get('PercentInsiders')),
+                'percent_institutions': DataValidationUtils.safe_float(data.get('PercentInstitutions')),
             }
             
         except Exception as e:
@@ -295,9 +293,17 @@ class AlphaVantageAPIClient:
             symbols: List of stock symbols
             delay: Delay between requests in seconds (minimum 12s for free tier)
         """
+        if not symbols:
+            logger.warning("No symbols provided for bulk data collection")
+            return {}
+            
         results = {}
         
         for i, symbol in enumerate(symbols):
+            if not DataValidationUtils.is_valid_stock_symbol(symbol):
+                logger.warning(f"Skipping invalid symbol: {symbol}")
+                continue
+                
             try:
                 logger.info(f"Fetching data for {symbol} ({i + 1}/{len(symbols)})")
                 
@@ -309,19 +315,21 @@ class AlphaVantageAPIClient:
                 
                 results[symbol] = {
                     'prices': prices,
-                    'overview': overview
+                    'overview': overview,
+                    'timestamp': DateUtils.get_current_datetime().isoformat()
                 }
                 
-                # Rate limiting
+                # Rate limiting - use the built-in rate limiter
                 if i < len(symbols) - 1:  # Don't wait after the last request
-                    logger.info(f"Waiting {delay} seconds for rate limiting...")
-                    time.sleep(delay)
+                    self.rate_limiter.wait_if_needed()
                 
             except Exception as e:
                 logger.error(f"Failed to fetch data for {symbol}: {e}")
                 results[symbol] = {
                     'prices': [],
-                    'overview': {}
+                    'overview': {},
+                    'error': str(e),
+                    'timestamp': DateUtils.get_current_datetime().isoformat()
                 }
         
         return results
@@ -329,12 +337,8 @@ class AlphaVantageAPIClient:
     @staticmethod
     def _safe_float(value) -> Optional[float]:
         """Safely convert string to float."""
-        if not value or value == 'None' or value == '-':
-            return None
-        try:
-            return float(value)
-        except (ValueError, TypeError):
-            return None
+        # Deprecated: Use DataValidationUtils.safe_float instead
+        return DataValidationUtils.safe_float(value)
 
     def get_sp500_symbols(self) -> List[str]:
         """Get S&P 500 stock symbols (top 100 for now due to API limits)."""

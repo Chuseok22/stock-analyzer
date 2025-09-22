@@ -24,8 +24,12 @@ from typing import Dict, Any, List
 # Add app directory to path
 sys.path.append(str(Path(__file__).parent / "app"))
 
-# 로그 디렉토리 생성
-log_dir = Path(__file__).parent / "storage" / "logs"
+# Path에 따른 로그 디렉토리 설정 (Docker 환경 고려)
+if Path("/app").exists():  # Docker 환경
+    log_dir = Path("/app/logs")
+else:  # 로컬 개발 환경
+    log_dir = Path(__file__).parent / "storage" / "logs"
+
 log_dir.mkdir(parents=True, exist_ok=True)
 
 # 로깅 설정
@@ -57,9 +61,13 @@ class GlobalStockAnalysisSystem:
         self.version = "v3.0_global"
         self.start_time = datetime.now()
         
-        # 로그 디렉토리 생성
-        log_dir = Path("storage/logs")
-        log_dir.mkdir(parents=True, exist_ok=True)
+        # Docker 환경과 로컬 환경에 따른 로그 디렉토리 설정
+        if Path("/app").exists():  # Docker 환경
+            self.log_dir = Path("/app/logs")
+        else:  # 로컬 개발 환경
+            self.log_dir = Path("storage/logs")
+        
+        self.log_dir.mkdir(parents=True, exist_ok=True)
         
         print("🌍 글로벌 주식 분석 시스템 시작")
         print(f"📅 시작 시간: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -89,11 +97,18 @@ class GlobalStockAnalysisSystem:
             
             print("✅ 환경 변수 확인 완료")
             
-            # 2. 디렉토리 구조 생성
+            # 2. 디렉토리 구조 생성 (환경별 로그 경로 고려)
             print("📁 디렉토리 구조 생성...")
+            
+            # 로그 디렉토리는 환경별로 설정
+            if Path("/app").exists():  # Docker 환경
+                log_base = "/app/logs"
+            else:  # 로컬 환경
+                log_base = "storage/logs"
+                
             directories = [
                 "storage/models/global",
-                "storage/logs", 
+                log_base, 
                 "storage/data",
                 "storage/backups"
             ]
@@ -309,9 +324,10 @@ class GlobalStockAnalysisSystem:
         print("⏰ 향상된 글로벌 스케줄러 시작...")
         
         try:
-            from scripts.enhanced_global_scheduler import EnhancedGlobalScheduler
+            from scripts.global_scheduler import GlobalScheduler
             
-            scheduler = EnhancedGlobalScheduler()
+            # 부트스트랩 포함 스케줄러 시작
+            scheduler = GlobalScheduler(run_bootstrap=True)
             scheduler.run_scheduler()
             
         except Exception as e:
@@ -414,7 +430,7 @@ class GlobalStockAnalysisSystem:
                 print(f"   🇺🇸 미국 모델: {'✅' if us_model.exists() else '❌'}")
             
             # 로그 파일
-            log_file = Path("storage/logs/global_system.log")
+            log_file = self.log_dir / "global_system.log"
             if log_file.exists():
                 size_mb = log_file.stat().st_size / (1024 * 1024)
                 print(f"\n📝 로그 파일: {size_mb:.1f}MB")

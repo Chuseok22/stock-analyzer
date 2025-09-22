@@ -9,25 +9,28 @@ import requests
 
 from app.config.settings import settings
 from app.database.redis_client import redis_client
+from app.utils.api_utils import APIUtils, KISAPIUtils, APIRateLimiter
 
 logger = logging.getLogger(__name__)
 
 # Redis key for KIS access token
 KIS_TOKEN_REDIS_KEY = "kis:access_token"
 
-logger = logging.getLogger(__name__)
-
 
 class KISAPIClient:
-  """KIS Open API client for fetching stock data."""
+  """KIS Open API client for fetching stock data with improved utilities."""
 
   def __init__(self):
-    """Initialize KIS API client with Redis-based token management."""
-    # Remove in-memory token storage
+    """Initialize KIS API client with Redis-based token management and rate limiting."""
     self.app_key = settings.kis_app_key
     self.app_secret = settings.kis_app_secret
     self.base_url = settings.kis_base_url
-    # Redis client is imported as module-level variable
+    
+    # Initialize rate limiter
+    self.rate_limiter = APIRateLimiter(calls_per_second=settings.api_rate_limit_delay or 10.0)
+    
+    # Create session with retries
+    self.session = APIUtils.create_session_with_retries()
 
     if not self.app_key or not self.app_secret:
       logger.warning("KIS API credentials not provided")
@@ -99,7 +102,10 @@ class KISAPIClient:
       return False
 
   def _make_request(self, method: str, endpoint: str, headers: Dict = None, params: Dict = None) -> Dict:
-    """Make authenticated request to KIS API."""
+    """Make authenticated request to KIS API with improved error handling."""
+    # Apply rate limiting
+    self.rate_limiter.wait_if_needed()
+    
     # Always get token from cache/Redis (not stored in instance)
     access_token = self.get_access_token()
 
@@ -116,24 +122,38 @@ class KISAPIClient:
       default_headers.update(headers)
 
     try:
-      if method.upper() == "GET":
-        response = requests.get(url, headers=default_headers, params=params)
-      elif method.upper() == "POST":
-        response = requests.post(url, headers=default_headers, json=params)
-      else:
-        raise ValueError(f"Unsupported HTTP method: {method}")
-
-      response.raise_for_status()
+      # Use safe API call wrapper
+      response = APIUtils.safe_api_call(
+        self._execute_request,
+        method, url, default_headers, params,
+        max_retries=3
+      )
+      
+      if response is None:
+        raise ValueError("Failed to get valid response after retries")
+      
       return response.json()
 
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
       logger.error(f"KIS API request failed: {e}")
       raise
+
+  def _execute_request(self, method: str, url: str, headers: Dict, params: Dict) -> requests.Response:
+    """Execute HTTP request."""
+    if method.upper() == "GET":
+      response = self.session.get(url, headers=headers, params=params)
+    elif method.upper() == "POST":
+      response = self.session.post(url, headers=headers, json=params)
+    else:
+      raise ValueError(f"Unsupported HTTP method: {method}")
+
+    response.raise_for_status()
+    return response
 
   def get_stock_price_daily(self, stock_code: str, start_date: str, end_date: str,
       market: str = "J") -> List[Dict]:
     """
-    Get daily stock price data.
+    Get daily stock price data with improved validation.
 
     Args:
         stock_code: Stock code (e.g., "005930" for Samsung)
@@ -159,10 +179,20 @@ class KISAPIClient:
     try:
       result = self._make_request("GET", endpoint, headers, params)
 
-      if result.get("rt_cd") == "0":  # Success
-        return result.get("output2", [])
+      # Use KISAPIUtils for validation and parsing
+      if KISAPIUtils.is_kis_response_successful(result):
+        raw_data = result.get("output2", [])
+        parsed_data = []
+        
+        for record in raw_data:
+          parsed = KISAPIUtils.parse_kis_price_data(record)
+          if parsed:
+            parsed_data.append(parsed)
+        
+        return parsed_data
       else:
-        logger.error(f"KIS API error: {result.get('msg1', 'Unknown error')}")
+        error_msg = KISAPIUtils.extract_kis_error_message(result)
+        logger.error(f"KIS API error for {stock_code}: {error_msg}")
         return []
 
     except Exception as e:

@@ -13,6 +13,8 @@ from app.database.connection import get_db_session
 from app.ml.models import ModelTrainer
 from app.models.entities import Stock, UniverseItem, Recommendation, StockIndicator, StockPrice
 from app.services.data_collection import DataCollectionService
+from app.utils.data_utils import DateUtils, DataFrameUtils
+from app.utils.database_utils import DatabaseUtils
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +89,7 @@ class RecommendationService:
       raise ValueError("Model must be trained before generating recommendations")
 
     if target_date is None:
-      target_date = date.today() + timedelta(days=1)
+      target_date = DateUtils.get_next_trading_day(date.today())
 
     try:
       logger.info(f"Generating recommendations for {target_date}")
@@ -117,26 +119,19 @@ class RecommendationService:
       return []
 
   def _get_current_features(self, universe_id: int, target_date: date) -> pd.DataFrame:
-    """Get current features for stocks in universe."""
-    # Use previous trading day for features
-    feature_date = target_date - timedelta(days=1)
+    """Get current features for stocks in universe with improved date handling."""
+    # Use DateUtils for proper trading day calculation
+    feature_date = DateUtils.get_previous_trading_day(target_date)
 
-    # If feature_date is weekend, go back to Friday
-    while feature_date.weekday() > 4:  # Monday=0, Sunday=6
-      feature_date -= timedelta(days=1)
-
-    with get_db_session() as db:
-      # Get stocks in universe
-      universe_stocks = db.query(UniverseItem).filter(
-          UniverseItem.universe_id == universe_id
-      ).all()
-
-      stock_ids = [item.stock_id for item in universe_stocks]
+    with DatabaseUtils.safe_db_session() as db:
+      # Get stocks in universe using DatabaseUtils
+      stock_ids = DatabaseUtils.get_stock_ids_in_universe(db, universe_id)
 
       if not stock_ids:
+        logger.warning(f"No stocks found in universe {universe_id}")
         return pd.DataFrame()
 
-      # Query latest indicators
+      # Query latest indicators with improved error handling
       query = db.query(
           StockIndicator.stock_id,
           Stock.code.label('stock_code'),
@@ -175,38 +170,19 @@ class RecommendationService:
       df = pd.read_sql(query.statement, db.bind)
 
       if not df.empty:
-        # Add derived features (same as in model training)
-        df = self._add_derived_features(df)
+        # Add derived features using DataFrameUtils
+        df = DataFrameUtils.add_technical_features(df)
+        
+        # Clean the dataframe
+        numeric_columns = [
+          'sma_5', 'sma_10', 'sma_20', 'sma_60', 'ema_12', 'ema_26', 'rsi_14',
+          'macd', 'macd_signal', 'bb_upper', 'bb_middle', 'bb_lower',
+          'volume_sma_20', 'volume_ratio', 'daily_return', 'volatility_20',
+          'close_price'
+        ]
+        df = DataFrameUtils.clean_dataframe(df, numeric_columns=numeric_columns)
 
       return df
-
-  def _add_derived_features(self, df: pd.DataFrame) -> pd.DataFrame:
-    """Add derived features for prediction."""
-    df = df.copy()
-
-    # Price relative to moving averages
-    df['price_to_sma_20'] = df['close_price'] / df['sma_20'] - 1
-
-    # RSI levels
-    df['rsi_level'] = pd.cut(df['rsi_14'],
-                             bins=[0, 30, 70, 100],
-                             labels=[0, 1, 2]).astype(float)
-
-    # MACD histogram
-    df['macd_histogram'] = df['macd'] - df['macd_signal']
-
-    # Bollinger Band position
-    df['bb_position'] = (df['close_price'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
-
-    # Volume surge indicator
-    df['volume_surge'] = (df['volume_ratio'] > 1.5).astype(int)
-
-    # Simple momentum (would need historical data for proper calculation)
-    df['momentum_5d'] = 0  # Placeholder
-    df['trend_strength'] = 0  # Placeholder
-    df['volatility_rank'] = 0.5  # Placeholder
-
-    return df
 
   def _make_predictions(self, features_data: pd.DataFrame) -> pd.DataFrame:
     """Make predictions using the trained model."""

@@ -17,6 +17,9 @@ from app.database.connection import init_db
 from app.services.data_collection import DataCollectionService
 from app.services.recommendation import RecommendationService
 from app.utils.logger import setup_logging
+from app.utils.data_utils import DateUtils, DataValidationUtils
+
+logger = logging.getLogger(__name__)
 
 
 def setup_argument_parser() -> argparse.ArgumentParser:
@@ -83,19 +86,9 @@ def collect_data_command(args) -> Dict[str, Any]:
     data_service = DataCollectionService()
 
     # Get stocks in universe and collect their data
-    from app.database.connection import get_db_session
-    with get_db_session() as db:
-      from app.models.entities import UniverseItem, Stock
-
-      universe_stocks = db.query(UniverseItem).filter(
-          UniverseItem.universe_id == args.universe_id
-      ).all()
-
-      stock_codes = []
-      for item in universe_stocks:
-        stock = db.query(Stock).filter(Stock.id == item.stock_id).first()
-        if stock and stock.active:
-          stock_codes.append(stock.code)
+    from app.utils.database_utils import DatabaseUtils
+    
+    stock_codes = DatabaseUtils.get_stock_codes_in_universe(args.universe_id)
 
     if not stock_codes:
       return { 'success': False, 'error': 'No stocks found in universe' }
@@ -171,7 +164,11 @@ def recommend_command(args) -> Dict[str, Any]:
     # Parse target date
     target_date = None
     if args.date:
+      if not DataValidationUtils.is_valid_date_format(args.date):
+        return { 'success': False, 'error': f'Invalid date format: {args.date}' }
       target_date = datetime.strptime(args.date, '%Y-%m-%d').date()
+    else:
+      target_date = DateUtils.get_previous_trading_day()
 
     recommendations = rec_service.generate_recommendations(
         args.universe_id, target_date, args.top_n

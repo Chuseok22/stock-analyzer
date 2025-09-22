@@ -12,6 +12,9 @@ from sqlalchemy.orm import Session
 from app.database.connection import get_db_session
 from app.models.entities import Stock, StockPrice, StockIndicator, Universe, UniverseItem
 from app.services.kis_api import KISAPIClient
+from app.utils.data_utils import DateUtils, DataValidationUtils, TechnicalIndicatorUtils
+from app.utils.database_utils import DatabaseUtils
+from app.utils.api_utils import APIResponseValidator
 
 logger = logging.getLogger(__name__)
 
@@ -36,32 +39,76 @@ class DataCollectionService:
     end_date = datetime.now().date()
     start_date = end_date - timedelta(days=days)
 
-    start_date_str = start_date.strftime("%Y%m%d")
-    end_date_str = end_date.strftime("%Y%m%d")
+    start_date_str = DateUtils.format_date_for_api(start_date)
+    end_date_str = DateUtils.format_date_for_api(end_date)
 
     logger.info(f"Collecting stock prices from {start_date_str} to {end_date_str}")
 
     try:
+      # Validate stock codes
+      valid_codes = [code for code in stock_codes if DataValidationUtils.validate_stock_code(code)]
+      if not valid_codes:
+        logger.error("No valid stock codes provided")
+        return False
+
       # Get stock price data from KIS API
       price_data = self.kis_client.bulk_stock_prices(
-          stock_codes, start_date_str, end_date_str
+          valid_codes, start_date_str, end_date_str
       )
 
-      # Save to database
-      with get_db_session() as db:
+      # Save to database using DatabaseUtils
+      success_count = 0
+      with DatabaseUtils.safe_db_session() as db:
         for stock_code, daily_data in price_data.items():
-          stock = self._get_stock_by_code(db, stock_code)
+          stock = DatabaseUtils.get_stock_by_code(db, stock_code)
           if not stock:
             logger.warning(f"Stock not found: {stock_code}")
             continue
 
-          self._save_price_data(db, stock.id, daily_data)
+          # Validate and process price data
+          validated_data = []
+          for raw_record in daily_data:
+            if self._validate_kis_price_record(raw_record):
+              validated_data.append(raw_record)
 
-        logger.info(f"Successfully collected price data for {len(price_data)} stocks")
-        return True
+          if validated_data:
+            processed = DatabaseUtils.bulk_upsert_price_data(db, stock.id, validated_data)
+            success_count += processed
+
+        logger.info(f"Successfully collected price data: {success_count} records for {len(price_data)} stocks")
+        return success_count > 0
 
     except Exception as e:
       logger.error(f"Failed to collect stock prices: {e}")
+      return False
+
+  def _validate_kis_price_record(self, record: Dict) -> bool:
+    """Validate KIS price record."""
+    try:
+      # Check required fields
+      required_fields = ["stck_bsop_date", "stck_oprc", "stck_hgpr", "stck_lwpr", "stck_clpr", "acml_vol"]
+      for field in required_fields:
+        if field not in record or not record[field]:
+          return False
+
+      # Validate date format
+      date_str = record["stck_bsop_date"]
+      if not DateUtils.parse_date_string(date_str):
+        return False
+
+      # Validate price values
+      price_data = {
+        'open_price': record["stck_oprc"],
+        'high_price': record["stck_hgpr"],
+        'low_price': record["stck_lwpr"],
+        'close_price': record["stck_clpr"],
+        'volume': record["acml_vol"]
+      }
+
+      return DataValidationUtils.validate_price_data(price_data)
+
+    except Exception as e:
+      logger.warning(f"Price record validation failed: {e}")
       return False
 
   def _get_stock_by_code(self, db: Session, stock_code: str) -> Optional[Stock]:
@@ -111,7 +158,7 @@ class DataCollectionService:
 
   def calculate_technical_indicators(self, stock_id: int = None, days: int = 100) -> bool:
     """
-    Calculate technical indicators for stocks.
+    Calculate technical indicators for stocks using utility functions.
 
     Args:
         stock_id: Specific stock ID (None for all active stocks)
@@ -121,7 +168,7 @@ class DataCollectionService:
         Success status
     """
     try:
-      with get_db_session() as db:
+      with DatabaseUtils.safe_db_session() as db:
         if stock_id:
           stock_ids = [stock_id]
         else:
@@ -129,149 +176,129 @@ class DataCollectionService:
           stocks = db.query(Stock).filter(Stock.active == True).all()
           stock_ids = [stock.id for stock in stocks]
 
+        success_count = 0
         for sid in stock_ids:
-          self._calculate_stock_indicators(db, sid, days)
+          if self._calculate_stock_indicators_optimized(db, sid, days):
+            success_count += 1
 
-        logger.info(f"Calculated indicators for {len(stock_ids)} stocks")
-        return True
+        logger.info(f"Calculated indicators for {success_count}/{len(stock_ids)} stocks")
+        return success_count > 0
 
     except Exception as e:
       logger.error(f"Failed to calculate technical indicators: {e}")
       return False
 
-  def _calculate_stock_indicators(self, db: Session, stock_id: int, days: int) -> None:
-    """Calculate technical indicators for a single stock."""
-    # Get recent price data
-    prices_query = db.query(StockPrice).filter(
-        StockPrice.stock_id == stock_id
-    ).order_by(StockPrice.trade_date.desc()).limit(days * 2)  # Extra data for indicators
+  def _calculate_stock_indicators_optimized(self, db: Session, stock_id: int, days: int) -> bool:
+    """Calculate technical indicators for a single stock using utility functions."""
+    try:
+      # Get recent price data
+      prices_query = db.query(StockPrice).filter(
+          StockPrice.stock_id == stock_id
+      ).order_by(StockPrice.trade_date.desc()).limit(days * 2)  # Extra data for indicators
 
-    prices = prices_query.all()
-    if len(prices) < 20:  # Need minimum data for indicators
-      logger.warning(f"Insufficient price data for stock {stock_id}")
-      return
+      prices = prices_query.all()
+      if len(prices) < 20:  # Need minimum data for indicators
+        logger.warning(f"Insufficient price data for stock {stock_id}")
+        return False
 
-    # Convert to DataFrame for easier calculation
-    df = pd.DataFrame([{
-      'date': p.trade_date,
-      'open': p.open_price,
-      'high': p.high_price,
-      'low': p.low_price,
-      'close': p.close_price,
-      'volume': p.volume
-    } for p in reversed(prices)])
+      # Convert to DataFrame for easier calculation
+      df = pd.DataFrame([{
+        'date': p.trade_date,
+        'open': p.open_price,
+        'high': p.high_price,
+        'low': p.low_price,
+        'close': p.close_price,
+        'volume': p.volume
+      } for p in reversed(prices)])
 
-    df = df.sort_values('date')
+      df = df.sort_values('date')
 
-    # Calculate indicators
-    indicators_df = self._compute_technical_indicators(df)
+      # Calculate indicators using utility functions
+      indicators_df = self._compute_technical_indicators_optimized(df)
 
-    # Save indicators to database
-    for _, row in indicators_df.iterrows():
-      if pd.isna(row['date']):
-        continue
+      # Prepare indicator data for bulk upsert
+      indicator_data_list = []
+      for _, row in indicators_df.iterrows():
+        if pd.isna(row['date']):
+          continue
 
-      # Check if indicator data already exists
-      existing = db.query(StockIndicator).filter(
-          and_(
-              StockIndicator.stock_id == stock_id,
-              StockIndicator.trade_date == row['date']
-          )
-      ).first()
+        indicator_data = {
+          'trade_date': row['date'],
+          'sma_5': row.get('sma_5'),
+          'sma_10': row.get('sma_10'),
+          'sma_20': row.get('sma_20'),
+          'sma_60': row.get('sma_60'),
+          'ema_12': row.get('ema_12'),
+          'ema_26': row.get('ema_26'),
+          'rsi_14': row.get('rsi_14'),
+          'macd': row.get('macd'),
+          'macd_signal': row.get('macd_signal'),
+          'bb_upper': row.get('bb_upper'),
+          'bb_middle': row.get('bb_middle'),
+          'bb_lower': row.get('bb_lower'),
+          'volume_sma_20': row.get('volume_sma_20'),
+          'volume_ratio': row.get('volume_ratio'),
+          'daily_return': row.get('daily_return'),
+          'volatility_20': row.get('volatility_20')
+        }
+        indicator_data_list.append(indicator_data)
 
-      if existing:
-        # Update existing record
-        self._update_indicator_record(existing, row)
-      else:
-        # Create new record
-        indicator = StockIndicator(
-            stock_id=stock_id,
-            trade_date=row['date']
-        )
-        self._update_indicator_record(indicator, row)
-        db.add(indicator)
+      # Bulk upsert using DatabaseUtils
+      processed = DatabaseUtils.bulk_upsert_indicator_data(db, stock_id, indicator_data_list)
+      logger.debug(f"Processed {processed} indicator records for stock {stock_id}")
 
-  def _compute_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-    """Compute technical indicators from price data."""
+      return processed > 0
+
+    except Exception as e:
+      logger.error(f"Failed to calculate indicators for stock {stock_id}: {e}")
+      return False
+
+  def _compute_technical_indicators_optimized(self, df: pd.DataFrame) -> pd.DataFrame:
+    """Compute technical indicators using utility functions."""
     result = df.copy()
 
-    # Simple Moving Averages
-    result['sma_5'] = df['close'].rolling(window=5).mean()
-    result['sma_10'] = df['close'].rolling(window=10).mean()
-    result['sma_20'] = df['close'].rolling(window=20).mean()
-    result['sma_60'] = df['close'].rolling(window=60).mean()
-
-    # Exponential Moving Averages
-    result['ema_12'] = df['close'].ewm(span=12).mean()
-    result['ema_26'] = df['close'].ewm(span=26).mean()
-
-    # RSI (Relative Strength Index)
-    result['rsi_14'] = self._calculate_rsi(df['close'], 14)
-
-    # MACD
-    result['macd'] = result['ema_12'] - result['ema_26']
-    result['macd_signal'] = result['macd'].ewm(span=9).mean()
-
-    # Bollinger Bands
-    bb_period = 20
-    bb_std = 2
-    bb_middle = df['close'].rolling(window=bb_period).mean()
-    bb_std_dev = df['close'].rolling(window=bb_period).std()
-    result['bb_upper'] = bb_middle + (bb_std_dev * bb_std)
-    result['bb_middle'] = bb_middle
-    result['bb_lower'] = bb_middle - (bb_std_dev * bb_std)
-
-    # Volume indicators
-    result['volume_sma_20'] = df['volume'].rolling(window=20).mean()
-    result['volume_ratio'] = df['volume'] / result['volume_sma_20']
-
-    # Price patterns
-    result['daily_return'] = df['close'].pct_change()
-    result['volatility_20'] = result['daily_return'].rolling(window=20).std()
-
-    return result
-
-  def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
-    """Calculate RSI (Relative Strength Index)."""
-    delta = prices.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-  def _update_indicator_record(self, indicator: StockIndicator, row: pd.Series) -> None:
-    """Update indicator record with calculated values."""
-    indicator.sma_5 = self._safe_float(row.get('sma_5'))
-    indicator.sma_10 = self._safe_float(row.get('sma_10'))
-    indicator.sma_20 = self._safe_float(row.get('sma_20'))
-    indicator.sma_60 = self._safe_float(row.get('sma_60'))
-    indicator.ema_12 = self._safe_float(row.get('ema_12'))
-    indicator.ema_26 = self._safe_float(row.get('ema_26'))
-    indicator.rsi_14 = self._safe_float(row.get('rsi_14'))
-    indicator.macd = self._safe_float(row.get('macd'))
-    indicator.macd_signal = self._safe_float(row.get('macd_signal'))
-    indicator.bb_upper = self._safe_float(row.get('bb_upper'))
-    indicator.bb_middle = self._safe_float(row.get('bb_middle'))
-    indicator.bb_lower = self._safe_float(row.get('bb_lower'))
-    indicator.volume_sma_20 = self._safe_float(row.get('volume_sma_20'))
-    indicator.volume_ratio = self._safe_float(row.get('volume_ratio'))
-    indicator.daily_return = self._safe_float(row.get('daily_return'))
-    indicator.volatility_20 = self._safe_float(row.get('volatility_20'))
-
-  def _safe_float(self, value) -> Optional[float]:
-    """Safely convert value to float, handling NaN."""
-    if pd.isna(value):
-      return None
     try:
-      return float(value)
-    except (TypeError, ValueError):
-      return None
+      # Simple Moving Averages using utility functions
+      result['sma_5'] = TechnicalIndicatorUtils.calculate_sma(df['close'], 5)
+      result['sma_10'] = TechnicalIndicatorUtils.calculate_sma(df['close'], 10)
+      result['sma_20'] = TechnicalIndicatorUtils.calculate_sma(df['close'], 20)
+      result['sma_60'] = TechnicalIndicatorUtils.calculate_sma(df['close'], 60)
+
+      # Exponential Moving Averages
+      result['ema_12'] = TechnicalIndicatorUtils.calculate_ema(df['close'], 12)
+      result['ema_26'] = TechnicalIndicatorUtils.calculate_ema(df['close'], 26)
+
+      # RSI
+      result['rsi_14'] = TechnicalIndicatorUtils.calculate_rsi(df['close'], 14)
+
+      # MACD
+      macd_data = TechnicalIndicatorUtils.calculate_macd(df['close'])
+      result['macd'] = macd_data['macd']
+      result['macd_signal'] = macd_data['signal']
+
+      # Bollinger Bands
+      bb_data = TechnicalIndicatorUtils.calculate_bollinger_bands(df['close'])
+      result['bb_upper'] = bb_data['upper']
+      result['bb_middle'] = bb_data['middle']
+      result['bb_lower'] = bb_data['lower']
+
+      # Volume indicators
+      result['volume_sma_20'] = TechnicalIndicatorUtils.calculate_sma(df['volume'], 20)
+      result['volume_ratio'] = df['volume'] / result['volume_sma_20']
+
+      # Price patterns
+      result['daily_return'] = df['close'].pct_change()
+      result['volatility_20'] = result['daily_return'].rolling(window=20).std()
+
+      return result
+
+    except Exception as e:
+      logger.error(f"Failed to compute technical indicators: {e}")
+      return df
 
   def get_training_data(self, universe_id: int, lookback_days: int = 252) -> pd.DataFrame:
     """
-    Get training data for machine learning model.
+    Get training data for machine learning model with improved error handling.
 
     Args:
         universe_id: Universe ID to get stocks from
@@ -281,22 +308,18 @@ class DataCollectionService:
         Training dataset as DataFrame
     """
     try:
-      with get_db_session() as db:
-        # Get stocks in universe
-        universe_stocks = db.query(UniverseItem).filter(
-            UniverseItem.universe_id == universe_id
-        ).all()
-
-        stock_ids = [item.stock_id for item in universe_stocks]
+      with DatabaseUtils.safe_db_session() as db:
+        # Get stocks in universe using DatabaseUtils
+        stock_ids = DatabaseUtils.get_stock_ids_in_universe(db, universe_id)
 
         if not stock_ids:
           logger.warning(f"No stocks found in universe {universe_id}")
           return pd.DataFrame()
 
-        # Get cutoff date
+        # Get cutoff date using DateUtils
         cutoff_date = datetime.now().date() - timedelta(days=lookback_days)
 
-        # Query training data
+        # Query training data with improved joins
         query = db.query(
             StockIndicator.stock_id,
             StockIndicator.trade_date,
@@ -338,14 +361,29 @@ class DataCollectionService:
         # Convert to DataFrame
         df = pd.read_sql(query.statement, db.bind)
 
+        if df.empty:
+          logger.warning("No training data found")
+          return df
+
         # Calculate target variable (next day return)
         df['next_day_return'] = df.groupby('stock_id')['daily_return'].shift(-1)
         df['target'] = (df['next_day_return'] > 0).astype(int)  # Binary classification
 
+        # Clean dataframe using utility functions
+        numeric_columns = [
+          'sma_5', 'sma_10', 'sma_20', 'sma_60', 'ema_12', 'ema_26', 'rsi_14',
+          'macd', 'macd_signal', 'bb_upper', 'bb_middle', 'bb_lower',
+          'volume_sma_20', 'volume_ratio', 'daily_return', 'volatility_20',
+          'close_price', 'next_day_return'
+        ]
+
+        from app.utils.data_utils import DataFrameUtils
+        df = DataFrameUtils.clean_dataframe(df, numeric_columns=numeric_columns)
+
         # Remove rows with missing target
         df = df.dropna(subset=['target'])
 
-        logger.info(f"Generated training data: {len(df)} samples")
+        logger.info(f"Generated training data: {len(df)} samples from {len(stock_ids)} stocks")
         return df
 
     except Exception as e:
@@ -354,7 +392,7 @@ class DataCollectionService:
 
   def update_universe_stocks(self, region: str = "KR", top_n: int = 200) -> Optional[int]:
     """
-    Update universe with top market cap stocks.
+    Update universe with top market cap stocks using improved validation.
 
     Args:
         region: Market region (KR/US)
@@ -371,29 +409,40 @@ class DataCollectionService:
         logger.error("Failed to get market cap ranking")
         return None
 
-      with get_db_session() as db:
+      with DatabaseUtils.safe_db_session() as db:
         # Create new universe
         universe = Universe(
             region=region,
             size=len(top_stocks),
             snapshot_date=date.today(),
-            rule_version="market_cap_top_" + str(top_n)
+            rule_version=f"market_cap_top_{top_n}_{datetime.now().strftime('%Y%m%d')}"
         )
         db.add(universe)
         db.flush()  # Get universe ID
 
-        # Add stocks to universe
+        # Add stocks to universe with validation
+        added_count = 0
         for stock_data in top_stocks:
           stock_code = stock_data.get("mksc_shrn_iscd", "")
 
+          # Validate stock code
+          if not DataValidationUtils.validate_stock_code(stock_code):
+            logger.warning(f"Invalid stock code: {stock_code}")
+            continue
+
           # Find or create stock
-          stock = self._get_stock_by_code(db, stock_code)
+          stock = DatabaseUtils.get_stock_by_code(db, stock_code)
           if not stock:
             # Create new stock if not exists
+            stock_name = stock_data.get("hts_kor_isnm", "").strip()
+            if not stock_name:
+              logger.warning(f"Missing stock name for {stock_code}")
+              continue
+
             stock = Stock(
                 region=region,
                 code=stock_code,
-                name=stock_data.get("hts_kor_isnm", ""),
+                name=stock_name,
                 active=True
             )
             db.add(stock)
@@ -405,9 +454,10 @@ class DataCollectionService:
               stock_id=stock.id
           )
           db.add(universe_item)
+          added_count += 1
 
-        logger.info(f"Created universe {universe.id} with {len(top_stocks)} stocks")
-        return universe.id
+        logger.info(f"Created universe {universe.id} with {added_count} stocks")
+        return universe.id if added_count > 0 else None
 
     except Exception as e:
       logger.error(f"Failed to update universe: {e}")

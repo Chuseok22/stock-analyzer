@@ -468,18 +468,31 @@ class SmartAlertSystem:
         print(f"📢 알림 전송: {alert.title}")
         
         try:
-            # Discord 전송 (기존 notification 서비스 활용)
+            # Discord와 Telegram 동시 전송
             discord_success = await self._send_discord_message(alert)
+            telegram_success = await self._send_telegram_message(alert)
             
+            success_count = 0
             if discord_success:
                 print(f"   ✅ Discord 전송 성공")
-                
-                # 전송 기록 저장
-                self.last_alerts[alert.alert_type.value] = datetime.now()
-                
-                return True
+                success_count += 1
             else:
                 print(f"   ❌ Discord 전송 실패")
+                
+            if telegram_success:
+                print(f"   ✅ Telegram 전송 성공")
+                success_count += 1
+            else:
+                print(f"   ❌ Telegram 전송 실패")
+            
+            # 하나라도 성공하면 성공으로 처리
+            if success_count > 0:
+                # 전송 기록 저장
+                self.last_alerts[alert.alert_type.value] = datetime.now()
+                print(f"   📊 알림 전송 완료: {success_count}/2 플랫폼")
+                return True
+            else:
+                print(f"   ❌ 모든 플랫폼 전송 실패")
                 return False
                 
         except Exception as e:
@@ -531,6 +544,53 @@ class SmartAlertSystem:
             
         except Exception as e:
             print(f"   ❌ Discord 전송 에러: {e}")
+            return False
+    
+    async def _send_telegram_message(self, alert: SmartAlert) -> bool:
+        """Telegram 메시지 전송"""
+        try:
+            import requests
+            
+            # Telegram 설정 확인
+            if not settings.telegram_bot_token or not settings.telegram_chat_id:
+                print("   ⚠️ Telegram 설정이 완료되지 않음")
+                return False
+            
+            # 메시지 포맷팅 (Telegram Markdown 지원)
+            message = f"""
+🚨 **{alert.title}**
+
+**긴급도:** {alert.urgency_level}
+**시장:** {alert.market_region}
+**시간:** {alert.created_at.strftime("%Y-%m-%d %H:%M")}
+
+{alert.message}
+"""
+            
+            # 추천사항이 있다면 추가
+            if alert.recommendations:
+                message += "\n\n**📋 권장사항:**\n"
+                for i, rec in enumerate(alert.recommendations, 1):
+                    message += f"{i}. {rec}\n"
+            
+            # Telegram API 호출
+            url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
+            payload = {
+                "chat_id": settings.telegram_chat_id,
+                "text": message,
+                "parse_mode": "Markdown"
+            }
+            
+            response = requests.post(url, json=payload, timeout=10)
+            
+            if response.status_code == 200:
+                return True
+            else:
+                print(f"   ❌ Telegram API 오류: {response.status_code} - {response.text}")
+                return False
+                
+        except Exception as e:
+            print(f"   ❌ Telegram 전송 에러: {e}")
             return False
     
     def _get_alert_color(self, urgency_level: str) -> int:
