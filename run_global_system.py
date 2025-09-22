@@ -24,15 +24,29 @@ from typing import Dict, Any, List
 # Add app directory to path
 sys.path.append(str(Path(__file__).parent / "app"))
 
+# 로그 디렉토리 생성
+log_dir = Path(__file__).parent / "storage" / "logs"
+log_dir.mkdir(parents=True, exist_ok=True)
+
 # 로깅 설정
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('storage/logs/global_system.log'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+try:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_dir / 'global_system.log'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+except Exception as e:
+    # 파일 로깅 실패 시 콘솔만 사용
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+    print(f"⚠️ 파일 로깅 설정 실패, 콘솔 로깅만 사용: {e}")
+
 logger = logging.getLogger(__name__)
 
 
@@ -485,5 +499,46 @@ def main():
         sys.exit(1)
 
 
+def start_health_server():
+    """간단한 헬스체크 서버 시작"""
+    import threading
+    import time
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import json
+    
+    class HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == '/health':
+                response = {"status": "healthy", "timestamp": time.time()}
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(response).encode())
+            else:
+                self.send_response(404)
+                self.end_headers()
+        
+        def log_message(self, format, *args):
+            pass  # 로그 억제
+    
+    def run_server():
+        try:
+            port = int(os.getenv('PORT', 8080))
+            server = HTTPServer(('0.0.0.0', port), HealthHandler)
+            logger.info(f"🏥 헬스체크 서버 시작 - 포트 {port}")
+            server.serve_forever()
+        except Exception as e:
+            logger.error(f"헬스체크 서버 오류: {e}")
+    
+    # 백그라운드에서 헬스체크 서버 실행
+    health_thread = threading.Thread(target=run_server, daemon=True)
+    health_thread.start()
+    return health_thread
+
+
 if __name__ == "__main__":
+    # 헬스체크 서버 시작
+    start_health_server()
+    
+    # 메인 시스템 실행
     main()

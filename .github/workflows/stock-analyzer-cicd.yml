@@ -88,10 +88,18 @@ jobs:
             echo $PW | sudo -S docker pull "${IMAGE}"
 
             echo "=== 기존 컨테이너 정리 ==="
-            EXISTING=$(echo $PW | sudo -S docker ps -a --filter "name=${CONTAINER_NAME}" --format "{{.Names}}")
-            if [ -n "$EXISTING" ]; then
-              echo "기존 컨테이너 ${EXISTING} 중지/삭제"
-              echo $PW | sudo -S docker rm -f "$EXISTING"
+            # 실행 중인 컨테이너 중지
+            if echo $PW | sudo -S docker ps --filter "name=${CONTAINER_NAME}" --format "{{.Names}}" | grep -q "${CONTAINER_NAME}"; then
+              echo "실행 중인 컨테이너 ${CONTAINER_NAME} 중지 중..."
+              echo $PW | sudo -S docker stop "${CONTAINER_NAME}" || true
+            fi
+            
+            # 모든 컨테이너 삭제
+            if echo $PW | sudo -S docker ps -a --filter "name=${CONTAINER_NAME}" --format "{{.Names}}" | grep -q "${CONTAINER_NAME}"; then
+              echo "기존 컨테이너 ${CONTAINER_NAME} 삭제 중..."
+              echo $PW | sudo -S docker rm "${CONTAINER_NAME}" || true
+            else
+              echo "정리할 기존 컨테이너가 없습니다"
             fi
 
             echo "=== 디렉터리 구조 준비 ==="
@@ -103,7 +111,7 @@ jobs:
             # GitHub Secret에서 .env 파일 내용을 가져와서 생성
             echo '${{ secrets.ENV_FILE }}' | sudo tee "${WORKDIR}/.env" > /dev/null
 
-            echo "=== 단순 컨테이너 실행 ==="
+            echo "=== 컨테이너 실행 ==="
             echo $PW | sudo -S docker run -d \
               --name "${CONTAINER_NAME}" \
               -p ${PORT}:8080 \
@@ -117,9 +125,28 @@ jobs:
               "${IMAGE}"
             
             echo "=== 서비스 상태 확인 ==="
-            sleep 10
+            sleep 15
+            echo "컨테이너 실행 상태:"
             echo $PW | sudo -S docker ps --filter "name=${CONTAINER_NAME}"
-            echo $PW | sudo -S docker logs --tail=20 "${CONTAINER_NAME}"
+            
+            echo "컨테이너 로그 (최근 30줄):"
+            echo $PW | sudo -S docker logs --tail=30 "${CONTAINER_NAME}"
+            
+            echo "=== 헬스체크 확인 ==="
+            for i in {1..6}; do
+              echo "헬스체크 시도 ${i}/6..."
+              if curl -s -f "http://localhost:${PORT}/health" > /dev/null 2>&1; then
+                echo "✅ 헬스체크 성공!"
+                break
+              elif [ $i -eq 6 ]; then
+                echo "❌ 헬스체크 실패 - 상세 로그 확인"
+                echo $PW | sudo -S docker logs "${CONTAINER_NAME}"
+                exit 1
+              else
+                echo "대기 중... (${i}/6)"
+                sleep 10
+              fi
+            done
             
             echo "=== dangling 이미지 정리 ==="
             echo $PW | sudo -S docker image prune -af

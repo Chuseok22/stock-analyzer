@@ -83,8 +83,12 @@ RUN find ./scripts -name "*.py" -exec chmod +x {} \; && \
 # 필요한 디렉토리 생성
 RUN mkdir -p /app/data \
              /app/logs \
+             /app/storage/logs \
              /app/storage/models \
              /app/storage/reports \
+             /app/storage/data \
+             /app/storage/features \
+             /app/storage/analysis_reports \
              /app/temp
 
 # 디렉토리 소유권 변경
