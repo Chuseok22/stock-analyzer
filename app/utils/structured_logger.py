@@ -21,17 +21,19 @@ class StructuredLogger:
         self.logger_name = logger_name
         self.logger = None
         
-        # 배포 환경 볼륨 매핑 경로 확인
-        self.base_volume_path = Path("/volume1/project/stock-analyzer")
-        
-        # 로컬 개발 환경 대체 경로
-        if not self.base_volume_path.exists():
+        # Docker 환경과 로컬 환경에 따른 로그 디렉토리 설정
+        if Path("/app").exists():  # Docker 환경
+            self.base_volume_path = Path("/app")
+            self.is_production = True
+            print(f"✅ Docker 환경: /app 로그 사용")
+        elif Path("/volume1/project/stock-analyzer").exists():  # Synology 직접 환경
+            self.base_volume_path = Path("/volume1/project/stock-analyzer")
+            self.is_production = True
+            print(f"✅ 배포 환경: 볼륨 매핑 로그 사용 - {self.base_volume_path}")
+        else:  # 로컬 개발 환경
             self.base_volume_path = Path("storage")
             self.is_production = False
             print("⚠️ 개발 환경: 로컬 storage 로그 사용")
-        else:
-            self.is_production = True
-            print(f"✅ 배포 환경: 볼륨 매핑 로그 사용 - {self.base_volume_path}")
         
         # 로그 베이스 디렉토리
         self.logs_base = self.base_volume_path / "logs"

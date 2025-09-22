@@ -14,6 +14,7 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
 from app.config.settings import settings
+from app.utils.data_utils import DateUtils, DataValidationUtils
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,12 @@ class NotificationService:
       return False
 
     if target_date is None:
-      target_date = date.today()
+      target_date = DateUtils.get_current_date()
+
+    # Validate recommendations data
+    if not self._validate_recommendations_data(recommendations):
+      logger.error("Invalid recommendations data format")
+      return False
 
     try:
       # Format message
@@ -94,6 +100,36 @@ class NotificationService:
       logger.error(f"Failed to send notifications: {e}")
       return False
 
+  def _validate_recommendations_data(self, recommendations: List[Dict]) -> bool:
+    """Validate recommendations data structure."""
+    if not isinstance(recommendations, list):
+      return False
+      
+    required_fields = ['stock_name', 'stock_code', 'score', 'rank', 'reason']
+    
+    for rec in recommendations:
+      if not isinstance(rec, dict):
+        return False
+      
+      # Check required fields
+      for field in required_fields:
+        if field not in rec:
+          logger.error(f"Missing required field in recommendation: {field}")
+          return False
+      
+      # Validate stock code
+      if not DataValidationUtils.is_valid_stock_symbol(rec['stock_code']):
+        logger.warning(f"Invalid stock code: {rec['stock_code']}")
+        continue
+      
+      # Validate score
+      score = rec.get('score')
+      if not isinstance(score, (int, float)) or not (0 <= score <= 1):
+        logger.warning(f"Invalid score for {rec['stock_code']}: {score}")
+        continue
+    
+    return True
+
   def _format_recommendations_message(self, recommendations: List[Dict], target_date: date) -> Dict:
     """Format recommendations into message data."""
     # Take top 5 recommendations
@@ -102,15 +138,16 @@ class NotificationService:
     # Calculate expected returns (simplified estimation)
     for rec in top_recommendations:
       # Use confidence score as proxy for expected return
-      base_return = rec['score'] * 0.1  # Scale to 0-10%
+      score = DataValidationUtils.safe_float(rec.get('score', 0)) or 0
+      base_return = score * 0.1  # Scale to 0-10%
       rec['expected_return'] = f"{base_return:.1f}%"
 
     message_data = {
-      'title': f"📈 주식 추천 알림 - {target_date.strftime('%Y년 %m월 %d일')}",
+      'title': f"📈 주식 추천 알림 - {DateUtils.format_korean_date(target_date)}",
       'date': target_date.strftime('%Y-%m-%d'),
       'recommendations': top_recommendations,
       'summary': self._generate_summary(top_recommendations),
-      'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+      'timestamp': DateUtils.get_current_datetime().strftime('%Y-%m-%d %H:%M:%S')
     }
 
     return message_data
@@ -120,15 +157,20 @@ class NotificationService:
     if not recommendations:
       return "추천 종목이 없습니다."
 
-    avg_score = sum(rec['score'] for rec in recommendations) / len(recommendations)
-    high_confidence = sum(1 for rec in recommendations if rec['score'] > 0.7)
+    try:
+      scores = [DataValidationUtils.safe_float(rec.get('score', 0)) or 0 for rec in recommendations]
+      avg_score = sum(scores) / len(scores) if scores else 0
+      high_confidence = sum(1 for score in scores if score > 0.7)
 
-    summary = f"총 {len(recommendations)}개 종목 추천"
-    if high_confidence > 0:
-      summary += f" (고신뢰도 {high_confidence}개)"
-    summary += f", 평균 신뢰도: {avg_score:.1%}"
+      summary = f"총 {len(recommendations)}개 종목 추천"
+      if high_confidence > 0:
+        summary += f" (고신뢰도 {high_confidence}개)"
+      summary += f", 평균 신뢰도: {avg_score:.1%}"
 
-    return summary
+      return summary
+    except Exception as e:
+      logger.error(f"Error generating summary: {e}")
+      return f"총 {len(recommendations)}개 종목 추천"
 
   def _send_email_notification(self, message_data: Dict) -> bool:
     """Send notification via email."""

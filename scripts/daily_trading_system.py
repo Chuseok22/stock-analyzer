@@ -22,7 +22,12 @@ from app.services.kis_api import KISAPIClient
 
 
 # 로깅 설정
-log_dir = Path(__file__).parent.parent / "storage" / "logs"
+# Docker 환경과 로컬 환경에 따른 로그 디렉토리 설정
+if Path("/app").exists():  # Docker 환경
+    log_dir = Path("/app/logs")
+else:  # 로컬 개발 환경
+    log_dir = Path(__file__).parent.parent / "storage" / "logs"
+
 log_dir.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
