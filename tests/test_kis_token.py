@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 # Add app directory to path
-sys.path.append(str(Path(__file__).parent / "app"))
+sys.path.append(str(Path(__file__).parent.parent))
 
 from app.services.kis_api import KISAPIClient
 from app.database.redis_client import redis_client

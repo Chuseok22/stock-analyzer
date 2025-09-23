@@ -7,7 +7,7 @@ from pathlib import Path
 
 # Add app directory to path
 sys.path.append(str(Path(__file__).parent))
-sys.path.append(str(Path(__file__).parent / "app"))
+sys.path.append(str(Path(__file__).parent.parent / "app"))
 
 from scripts.global_scheduler import GlobalScheduler
 

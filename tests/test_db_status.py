@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 # Add app directory to path
-sys.path.append(str(Path(__file__).parent / "app"))
+sys.path.append(str(Path(__file__).parent.parent))
 
 from app.database.connection import get_db_session
 from app.models.entities import StockMaster, StockDailyPrice, MarketRegion

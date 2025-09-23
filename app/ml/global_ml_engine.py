@@ -290,15 +290,8 @@ class GlobalMLEngine:
                     print(f"   ⚠️ 가격 데이터 부족: {len(price_data)}일")
                     return None
                 
-                # 기술적 지표 데이터
-                tech_data = db.query(StockTechnicalIndicator).filter(
-                    StockTechnicalIndicator.stock_id == stock_id,
-                    StockTechnicalIndicator.calculation_date >= start_date,
-                    StockTechnicalIndicator.calculation_date <= end_date
-                ).order_by(StockTechnicalIndicator.calculation_date).all()
-                
-                # DataFrame 생성
-                df = self._build_feature_dataframe(price_data, tech_data, stock)
+                # DataFrame 생성 (기술적 지표 제외)
+                df = self._build_feature_dataframe(price_data, stock)
                 
                 # 고급 피처 추가
                 df = self._add_advanced_features(df, stock)
@@ -317,7 +310,7 @@ class GlobalMLEngine:
             print(f"   ❌ 피처 생성 실패: {e}")
             return None
     
-    def _build_feature_dataframe(self, price_data: List, tech_data: List, stock: StockMaster) -> pd.DataFrame:
+    def _build_feature_dataframe(self, price_data: List, stock: StockMaster) -> pd.DataFrame:
         """기본 피처 DataFrame 구성"""
         
         # 가격 데이터 변환
@@ -333,34 +326,45 @@ class GlobalMLEngine:
             'vwap': float(p.vwap) if p.vwap else float(p.close_price)
         } for p in price_data])
         
-        # 기술적 지표 데이터 변환
-        tech_df = pd.DataFrame([{
-            'date': t.calculation_date,
-            'rsi_14': t.rsi_14,
-            'sma_5': t.sma_5,
-            'sma_20': t.sma_20,
-            'sma_50': t.sma_50,
-            'ema_12': t.ema_12,
-            'ema_26': t.ema_26,
-            'bb_upper': t.bb_upper_20_2,
-            'bb_lower': t.bb_lower_20_2,
-            'bb_percent': t.bb_percent,
-            'macd': t.macd_line,
-            'macd_signal': t.macd_signal,
-            'volume_ratio': t.volume_ratio
-        } for t in tech_data])
+        # 기본 기술적 지표 계산
+        price_df = price_df.sort_values('date').reset_index(drop=True)
         
-        # 날짜 기준으로 결합
-        df = pd.merge(price_df, tech_df, on='date', how='left')
+        # 이동평균
+        price_df['sma_5'] = price_df['close'].rolling(5, min_periods=1).mean()
+        price_df['sma_20'] = price_df['close'].rolling(20, min_periods=1).mean()
+        price_df['sma_50'] = price_df['close'].rolling(50, min_periods=1).mean()
+        
+        # RSI
+        delta = price_df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean()
+        rs = gain / loss
+        price_df['rsi_14'] = 100 - (100 / (1 + rs))
+        
+        # 볼린저 밴드
+        price_df['bb_middle'] = price_df['sma_20']
+        bb_std = price_df['close'].rolling(20, min_periods=1).std()
+        price_df['bb_upper'] = price_df['bb_middle'] + (bb_std * 2)
+        price_df['bb_lower'] = price_df['bb_middle'] - (bb_std * 2)
+        price_df['bb_percent'] = (price_df['close'] - price_df['bb_lower']) / (price_df['bb_upper'] - price_df['bb_lower'])
+        
+        # MACD
+        ema_12 = price_df['close'].ewm(span=12).mean()
+        ema_26 = price_df['close'].ewm(span=26).mean()
+        price_df['macd'] = ema_12 - ema_26
+        price_df['macd_signal'] = price_df['macd'].ewm(span=9).mean()
+        
+        # 거래량 비율
+        price_df['volume_ratio'] = price_df['volume'] / price_df['volume'].rolling(20, min_periods=1).mean()
         
         # 기본 피처 추가
-        df['price_range'] = (df['high'] - df['low']) / df['close']
-        df['open_close_ratio'] = df['open'] / df['close']
-        df['high_close_ratio'] = df['high'] / df['close']
-        df['low_close_ratio'] = df['low'] / df['close']
-        df['volume_price_trend'] = df['volume'] * df['daily_return']
+        price_df['price_range'] = (price_df['high'] - price_df['low']) / price_df['close']
+        price_df['open_close_ratio'] = price_df['open'] / price_df['close']
+        price_df['high_close_ratio'] = price_df['high'] / price_df['close']
+        price_df['low_close_ratio'] = price_df['low'] / price_df['close']
+        price_df['volume_price_trend'] = price_df['volume'] * price_df['daily_return']
         
-        return df.fillna(method='ffill').fillna(0)
+        return price_df.fillna(method='ffill').fillna(0)
     
     def _add_advanced_features(self, df: pd.DataFrame, stock: StockMaster) -> pd.DataFrame:
         """고급 피처 추가 - 딥러닝 스타일"""
@@ -399,8 +403,10 @@ class GlobalMLEngine:
         df['gap_down'] = ((df['open'] < df['close'].shift(1)) & 
                          (df['close'].shift(1) - df['open']) / df['close'].shift(1) > 0.02).astype(int)
         
-        # 캔들스틱 패턴
-        df['doji'] = (abs(df['open'] - df['close']) / (df['high'] - df['low']) < 0.1).astype(int)
+        # 캔들스틱 패턴 (0으로 나누기 방지)
+        price_range = df['high'] - df['low']
+        price_range = price_range.where(price_range > 0, 0.001)  # 0이면 0.001로 대체
+        df['doji'] = (abs(df['open'] - df['close']) / price_range < 0.1).astype(int)
         df['hammer'] = ((df['close'] > df['open']) & 
                        ((df['open'] - df['low']) > 2 * (df['close'] - df['open']))).astype(int)
         
@@ -576,12 +582,12 @@ class GlobalMLEngine:
                 
                 kr_recent_data = db.query(StockDailyPrice).join(StockMaster).filter(
                     StockMaster.market_region == MarketRegion.KR.value,
-                    StockDailyPrice.date >= recent_date
+                    StockDailyPrice.trade_date >= recent_date
                 ).count()
                 
                 us_recent_data = db.query(StockDailyPrice).join(StockMaster).filter(
                     StockMaster.market_region == MarketRegion.US.value,
-                    StockDailyPrice.date >= recent_date
+                    StockDailyPrice.trade_date >= recent_date
                 ).count()
                 
                 print(f"   🇰🇷 한국 종목: {kr_stocks}개, 최근 데이터: {kr_recent_data}개")
@@ -630,12 +636,12 @@ class GlobalMLEngine:
                 
                 kr_recent_data = db.query(StockDailyPrice).join(StockMaster).filter(
                     StockMaster.market_region == MarketRegion.KR.value,
-                    StockDailyPrice.date >= recent_date
+                    StockDailyPrice.trade_date >= recent_date
                 ).count()
                 
                 us_recent_data = db.query(StockDailyPrice).join(StockMaster).filter(
                     StockMaster.market_region == MarketRegion.US.value,
-                    StockDailyPrice.date >= recent_date
+                    StockDailyPrice.trade_date >= recent_date
                 ).count()
                 
                 print(f"   🇰🇷 한국 종목: {kr_stocks}개, 최근 데이터: {kr_recent_data}개")
@@ -978,7 +984,7 @@ class GlobalMLEngine:
                     is_active=True
                 ).all()
                 
-                target_date = datetime.now().date()
+                target_date = datetime.now().date() - timedelta(days=1)  # 하루 전 데이터 사용
                 
                 for stock in stocks:
                     try:

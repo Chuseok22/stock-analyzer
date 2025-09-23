@@ -1,12 +1,18 @@
 """
 주식 분석 시스템 데이터베이스 모델 테스트
 """
+import sys
+from pathlib import Path
+
+# app 모듈 경로 추가
+sys.path.append(str(Path(__file__).parent.parent))
+
 import pytest
 from datetime import datetime, date
 from decimal import Decimal
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from app.models import Base, Stock, StockData, StockRecommendation, MLModel
+from app.models.entities import Base, StockMaster, StockDailyPrice
 import os
 
 

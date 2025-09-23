@@ -8,7 +8,7 @@ import asyncio
 
 # Add app directory to path
 sys.path.append(str(Path(__file__).parent))
-sys.path.append(str(Path(__file__).parent / "app"))
+sys.path.append(str(Path(__file__).parent.parent / "app"))
 
 async def test_korean_premarket():
     """한국 프리마켓 추천 기능 테스트"""

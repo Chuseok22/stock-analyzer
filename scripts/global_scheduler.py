@@ -384,13 +384,8 @@ class GlobalScheduler:
             # 1. 한국 시장 프리마켓 추천 생성
             from app.models.entities import MarketRegion
             
-            # Mock 데이터 사용 여부 확인 (테스트용)
-            if hasattr(self.ml_engine, '_mock_predictions'):
-                print("🧪 테스트용 Mock 예측 데이터 사용")
-                predictions = self.ml_engine._mock_predictions
-            else:
-                # ML 엔진을 통한 추천 생성
-                predictions = self.ml_engine.predict_stocks(MarketRegion.KOREA, top_n=5)
+            # ML 엔진을 통한 추천 생성 (Mock 데이터 제거)
+            predictions = self.ml_engine.predict_stocks(MarketRegion.KR, top_n=5)
             
             if predictions:
                 # 스마트 알림 시스템을 통한 추천 메시지 생성
@@ -519,18 +514,19 @@ class GlobalScheduler:
         print("\n📊 한국 데이터 수집 시작 (17:00)")
         
         try:
-            # 기존 한국 데이터 수집 서비스 사용
-            from app.services.data_collection import DataCollectionService
+            # 통합 데이터 수집기 사용
+            import asyncio
+            from app.services.unified_data_collector import UnifiedDataCollector
             
-            data_service = DataCollectionService()
-            success = data_service.collect_daily_data()
+            collector = UnifiedDataCollector()
+            success = asyncio.run(collector.collect_korean_daily_data())
             
             if success:
                 print("✅ 한국 데이터 수집 완료")
+                return True
             else:
                 print("❌ 한국 데이터 수집 실패")
-            
-            return success
+                return False
             
         except Exception as e:
             print(f"❌ 한국 데이터 수집 오류: {e}")
@@ -538,34 +534,26 @@ class GlobalScheduler:
     
     def _collect_us_data(self):
         """미국 데이터 수집"""
-        print("\n📊 미국 데이터 수집 시작 (07:00)")
+        print("\n📊 미국 데이터 수집 시작 (09:00)")
         
         try:
-            # 미국 데이터 수집을 위한 간단한 로직
-            from app.services.alpha_vantage_api import AlphaVantageAPIClient
+            # 통합 데이터 수집기 사용
+            import asyncio
+            from app.services.unified_data_collector import UnifiedDataCollector
             
-            av_client = AlphaVantageAPIClient()
-            
-            # S&P 500 주요 종목들 수집
-            symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "NFLX"]
-            
-            collected_count = 0
-            for symbol in symbols:
-                try:
-                    data = av_client.get_daily_prices(symbol, "compact")
-                    if data:
-                        collected_count += 1
-                except:
-                    continue
-            
-            success = collected_count > len(symbols) // 2  # 50% 이상 성공하면 성공으로 간주
+            collector = UnifiedDataCollector()
+            success = asyncio.run(collector.collect_us_daily_data())
             
             if success:
-                print(f"✅ 미국 데이터 수집 완료 ({collected_count}/{len(symbols)})")
+                print("✅ 미국 데이터 수집 완료")
+                return True
             else:
-                print(f"❌ 미국 데이터 수집 실패 ({collected_count}/{len(symbols)})")
+                print("❌ 미국 데이터 수집 실패")
+                return False
             
-            return success
+        except Exception as e:
+            print(f"❌ 미국 데이터 수집 오류: {e}")
+            return False
             
         except Exception as e:
             print(f"❌ 미국 데이터 수집 오류: {e}")
