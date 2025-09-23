@@ -263,14 +263,12 @@ class GlobalScheduler:
     async def _send_bootstrap_complete_alert(self):
         """부트스트랩 완료 알림 전송"""
         try:
+            print("   📢 부트스트랩 완료 알림 준비 중...")
             current_time = datetime.now()
             current_date = current_time.strftime('%Y-%m-%d')
             
             # 오늘 예정된 스케줄 수집
             today_schedule = self._get_today_schedule()
-            
-            # SmartAlert 객체로 생성 (올바른 import 추가 필요)
-            from app.services.smart_alert_system import SmartAlert, AlertType
             
             # 알림 제목과 내용 생성
             title = "🚀 글로벌 주식 분석 시스템 시작"
@@ -299,26 +297,41 @@ class GlobalScheduler:
 **서버 상태:** 정상 운영 중
             """.strip()
             
-            # SmartAlert 객체 생성
-            alert = SmartAlert(
-                alert_type=AlertType.PREMARKET_RECOMMENDATIONS,  # 시스템 시작은 프리마켓 유형으로 사용
-                market_region="GLOBAL",
-                title=title,
-                message=content,
-                stocks=[],
-                urgency_level="MEDIUM",
-                action_required=False,
-                recommendations=[
-                    "시스템이 정상적으로 시작되었습니다",
-                    "모든 초기 데이터가 준비되었습니다",
-                    "ML 모델이 예측 준비 상태입니다"
-                ],
-                created_at=current_time
-            )
+            # 간단한 알림 전송 (SmartAlert 대신 직접 알림 서비스 사용)
+            print("   📤 알림 서비스를 통해 직접 전송...")
             
-            # 올바른 파라미터로 알림 전송
-            await self.alert_system.send_alert(alert)
-            print("   📢 부트스트랩 완료 알림 전송됨")
+            # 알림 서비스 직접 사용 (더 안정적)
+            from app.services.notification import NotificationService
+            from app.services.telegram_service import TelegramNotifier
+            
+            # 텔레그램 알림 시도
+            try:
+                telegram = TelegramNotifier()
+                telegram_success = telegram.send_message(f"🚀 **시스템 시작 알림**\n\n{content}")
+                if telegram_success:
+                    print("   ✅ 텔레그램 알림 전송 성공")
+                else:
+                    print("   ⚠️ 텔레그램 알림 전송 실패")
+            except Exception as tg_e:
+                print(f"   ⚠️ 텔레그램 알림 오류: {tg_e}")
+            
+            # NotificationService 백업 시도
+            try:
+                notification_service = NotificationService()
+                # 간단한 시스템 알림으로 전송
+                notification_success = notification_service.send_system_alert(
+                    title=title,
+                    message=content,
+                    alert_type="SYSTEM_START"
+                )
+                if notification_success:
+                    print("   ✅ 시스템 알림 전송 성공")
+                else:
+                    print("   ⚠️ 시스템 알림 전송 실패")
+            except Exception as ns_e:
+                print(f"   ⚠️ NotificationService 오류: {ns_e}")
+            
+            print("   📢 부트스트랩 완료 알림 처리 완료")
             
         except Exception as e:
             print(f"   ⚠️ 부트스트랩 알림 전송 실패: {e}")

@@ -405,30 +405,113 @@ class NotificationService:
       return False
 
   def send_performance_report(self, performance_data: Dict) -> bool:
-    """Send weekly/monthly performance report."""
+    """Send weekly performance report to all channels."""
     try:
-      title = "📊 주식 추천 성과 리포트"
-
-      if not performance_data or 'error' in performance_data:
-        message = f"{title}\n\n❌ 성과 데이터를 가져올 수 없습니다."
-      else:
-        message = self._format_performance_message(title, performance_data)
-
-      success_count = 0
-
-      # Send via configured channels
+      message_data = self._prepare_performance_message(performance_data)
+      
+      success = True
+      
+      # Send to Slack
       if settings.slack_enabled and self.slack_client:
-        if self._send_simple_slack_message(message):
-          success_count += 1
-
-      if settings.telegram_enabled:
-        if self._send_simple_telegram_message(message):
-          success_count += 1
-
-      return success_count > 0
-
+        try:
+          self.slack_client.chat_postMessage(
+            channel=settings.slack_channel,
+            text=message_data['text'],
+            blocks=message_data.get('blocks', [])
+          )
+          logger.info("Performance report sent to Slack")
+        except Exception as e:
+          logger.error(f"Failed to send performance report to Slack: {e}")
+          success = False
+      
+      # Send to Discord
+      if settings.discord_enabled and settings.discord_webhook_url:
+        try:
+          webhook = DiscordWebhook(url=settings.discord_webhook_url)
+          embed = DiscordEmbed(
+            title="📊 Weekly Performance Report",
+            description=message_data['text'],
+            color=242424
+          )
+          webhook.add_embed(embed)
+          webhook.execute()
+          logger.info("Performance report sent to Discord")
+        except Exception as e:
+          logger.error(f"Failed to send performance report to Discord: {e}")
+          success = False
+      
+      # Send email
+      if settings.smtp_enabled:
+        try:
+          self._send_email(
+            subject="📊 Stock Analyzer - Weekly Performance Report",
+            html_content=self._create_html_email(message_data)
+          )
+          logger.info("Performance report sent via email")
+        except Exception as e:
+          logger.error(f"Failed to send performance report email: {e}")
+          success = False
+      
+      return success
+      
     except Exception as e:
       logger.error(f"Failed to send performance report: {e}")
+      return False
+
+  def send_system_alert(self, title: str, message: str, alert_type: str = "SYSTEM") -> bool:
+    """시스템 알림 전송"""
+    try:
+      logger.info(f"Sending system alert: {title}")
+      
+      success = True
+      
+      # 알림 메시지 포맷팅
+      formatted_message = f"🚨 **{title}**\n\n{message}\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+      
+      # Send to Slack
+      if settings.slack_enabled and self.slack_client:
+        try:
+          self.slack_client.chat_postMessage(
+            channel=settings.slack_channel,
+            text=formatted_message
+          )
+          logger.info("System alert sent to Slack")
+        except Exception as e:
+          logger.error(f"Failed to send system alert to Slack: {e}")
+          success = False
+      
+      # Send to Discord
+      if settings.discord_enabled and settings.discord_webhook_url:
+        try:
+          webhook = DiscordWebhook(url=settings.discord_webhook_url)
+          embed = DiscordEmbed(
+            title=title,
+            description=message,
+            color=16737380  # Orange color for alerts
+          )
+          webhook.add_embed(embed)
+          webhook.execute()
+          logger.info("System alert sent to Discord")
+        except Exception as e:
+          logger.error(f"Failed to send system alert to Discord: {e}")
+          success = False
+      
+      # Send email
+      if settings.smtp_enabled:
+        try:
+          self._send_email(
+            subject=f"🚨 Stock Analyzer Alert - {title}",
+            body=formatted_message
+          )
+          logger.info("System alert sent via email")
+        except Exception as e:
+          logger.error(f"Failed to send system alert email: {e}")
+          success = False
+      
+      return success
+      
+    except Exception as e:
+      logger.error(f"Failed to send system alert: {e}")
       return False
 
   def _format_performance_message(self, title: str, performance_data: Dict) -> str:
