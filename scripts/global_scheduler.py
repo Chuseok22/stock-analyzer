@@ -8,7 +8,7 @@
 """
 import sys
 from pathlib import Path
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, date
 from typing import Dict, Any, Optional
 import asyncio
 import pytz
@@ -53,6 +53,9 @@ class GlobalScheduler:
         # 초기 부트스트랩 실행
         if run_bootstrap:
             self._run_initial_bootstrap()
+        else:
+            # 부트스트랩을 건너뛰더라도 모델 존재 여부는 확인
+            self._ensure_models_exist()
     
     def _setup_signal_handlers(self):
         """시그널 핸들러 설정"""
@@ -93,16 +96,16 @@ class GlobalScheduler:
         
         # 1. 한국 시장 관련 스케줄
         schedule.every().day.at("08:30").do(lambda: asyncio.run(self._run_korean_premarket_recommendations())).tag("kr_premarket")  # 한국 장 시작 30분 전
-        schedule.every().day.at("16:00").do(lambda: asyncio.run(self._run_korean_market_analysis())).tag("kr_market")  # 한국 장 마감 후 분석
+        schedule.every().day.at("19:00").do(self._collect_korean_data).tag("kr_data")  # KIS API 당일 데이터 확정 후 수집
+        schedule.every().day.at("19:15").do(lambda: asyncio.run(self._run_korean_market_analysis())).tag("kr_market")  # 데이터 수집 후 분석
         
         # 2. 미국 시장 관련 스케줄 (동적)
         schedule.every().day.at(premarket_start_kr).do(lambda: asyncio.run(self._run_us_premarket_alert())).tag("us_premarket")
         schedule.every().day.at(regular_start_kr).do(lambda: asyncio.run(self._run_us_market_open_alert())).tag("us_market_open")
         schedule.every().day.at(market_analysis_time).do(lambda: asyncio.run(self._run_us_market_analysis())).tag("us_market")
         
-        # 3. 데이터 수집 스케줄
+        # 3. 데이터 수집 스케줄 (미국만 남김 - 한국은 위로 이동)
         schedule.every().day.at(aftermarket_end_kr).do(self._collect_us_data).tag("us_data")
-        schedule.every().day.at("17:00").do(self._collect_korean_data).tag("kr_data")
         
         # 4. 최적화된 ML 모델 학습 스케줄
         # 일일 ML 학습 (매일 06:30 - 시장 활동 없는 최적 시간)
@@ -110,6 +113,9 @@ class GlobalScheduler:
         
         # 주간 고도화 학습 (일요일 02:00 - 주말 활용)
         schedule.every().sunday.at("02:00").do(lambda: asyncio.run(self._run_weekly_advanced_training())).tag("ml_weekly_advanced")
+        
+        # 일일 성능 평가 (매일 20:00 - 한국 장 분석 완료 후)
+        schedule.every().day.at("20:00").do(lambda: asyncio.run(self._run_daily_performance_evaluation())).tag("ml_performance")
         
         # 5. KIS API 토큰 재발급 (매일 자정)
         schedule.every().day.at("00:00").do(self._refresh_kis_token).tag("kis_token")
@@ -122,16 +128,89 @@ class GlobalScheduler:
         
         print("✅ 동적 스케줄 설정 완료:")
         print(f"   🇰🇷 한국 프리마켓 추천: 매일 08:30")
-        print(f"   📈 한국 시장 분석: 매일 16:00")
+        print(f"   📊 한국 데이터 수집: 매일 19:00 (KIS API 당일 데이터 확정 후)")
+        print(f"   📈 한국 시장 분석: 매일 19:15 (최신 당일 데이터 분석)")
         print(f"   🇺🇸 미국 프리마켓: 매일 {premarket_start_kr} (ET 04:00)")
         print(f"   🇺🇸 미국 정규장 시작: 매일 {regular_start_kr} (ET 09:30)")
         print(f"   📊 미국 시장 분석: 매일 {market_analysis_time} (ET 16:30)")
         print(f"   📁 미국 데이터 수집: 매일 {aftermarket_end_kr} (ET 20:30)")
         print(f"   🤖 일일 ML 학습: 매일 06:30 (최적화)")
         print(f"   🧠 주간 고도화 학습: 매주 일요일 02:00")
-        print(f"   � KIS 토큰 재발급: 매일 00:00")
-        print(f"   �🚨 긴급 알림: 4시간마다")
+        print(f"   📊 성능 평가: 매일 18:00 (예측 vs 실제)")
+        print(f"   🔑 KIS 토큰 재발급: 매일 00:00")
+        print(f"   🚨 긴급 알림: 4시간마다")
+        print(f"   🌍 {dst_status}")
         print(f"   ⏰ {dst_status}")
+    
+    def _ensure_models_exist(self):
+        """모델 존재 여부 확인 및 필요시 학습"""
+        print("🔍 ML 모델 존재 여부 확인 중...")
+        
+        try:
+            from pathlib import Path
+            
+            # 모델 저장 경로 확인
+            model_dir = Path(__file__).parent.parent / "storage" / "models" / "global"
+            
+            # 한국 및 미국 모델 파일 확인
+            kr_model_path = model_dir / "KR_model_v3.0_global.joblib"
+            us_model_path = model_dir / "US_model_v3.0_global.joblib"
+            kr_scaler_path = model_dir / "KR_scaler_v3.0_global.joblib"
+            us_scaler_path = model_dir / "US_scaler_v3.0_global.joblib"
+            
+            missing_models = []
+            if not kr_model_path.exists() or not kr_scaler_path.exists():
+                missing_models.append("한국(KR)")
+            if not us_model_path.exists() or not us_scaler_path.exists():
+                missing_models.append("미국(US)")
+            
+            if missing_models:
+                print(f"   ⚠️ 누락된 모델: {', '.join(missing_models)}")
+                print("   🚀 실제 모델 학습 시작...")
+                
+                # 실제 모델 학습 수행
+                success = self._bootstrap_ml_models()
+                
+                if success:
+                    print("   ✅ 모델 학습 완료 - 서비스 시작 가능")
+                else:
+                    print("   ❌ 모델 학습 실패 - 서비스 제한될 수 있음")
+                    # 5분 후 재시도
+                    import schedule
+                    schedule.every(5).minutes.do(self._background_model_training).tag("bg_training")
+                
+            else:
+                print("   ✅ 모든 ML 모델 파일 존재 확인")
+                
+        except Exception as e:
+            print(f"   ❌ 모델 존재 확인 오류: {e}")
+            print("   🚀 안전을 위해 모델 학습 시도...")
+            try:
+                self._bootstrap_ml_models()
+            except Exception as bootstrap_error:
+                print(f"   ❌ 모델 학습도 실패: {bootstrap_error}")
+    
+    def _background_model_training(self):
+        """백그라운드 실제 모델 학습"""
+        print("🎯 백그라운드 ML 모델 학습 시작...")
+        
+        try:
+            # 실제 모델 학습 수행
+            success = self._bootstrap_ml_models()
+            
+            if success:
+                print("✅ 백그라운드 모델 학습 완료")
+                # 일회성 작업이므로 스케줄에서 제거
+                schedule.clear("bg_training")
+            else:
+                print("❌ 백그라운드 모델 학습 실패")
+                # 1시간 후 재시도
+                schedule.every(1).hours.do(self._background_model_training).tag("bg_training")
+                
+        except Exception as e:
+            print(f"❌ 백그라운드 모델 학습 오류: {e}")
+            # 1시간 후 재시도
+            schedule.every(1).hours.do(self._background_model_training).tag("bg_training")
     
     def _run_initial_bootstrap(self):
         """시스템 시작 시 초기 부트스트랩 실행"""
@@ -439,6 +518,10 @@ class GlobalScheduler:
             predictions = self.ml_engine.predict_stocks(MarketRegion.KR, top_n=5)
             
             if predictions:
+                # 🔥 학습용 예측 결과 저장 (실시간 학습 시스템용)
+                print("💾 한국 시장 예측 결과 저장...")
+                self.ml_engine.save_predictions_for_learning(predictions)
+                
                 # 스마트 알림 시스템을 통한 추천 메시지 생성
                 premarket_alert = await self.alert_system.generate_korean_premarket_recommendations(predictions)
                 
@@ -465,8 +548,8 @@ class GlobalScheduler:
             return False
     
     async def _run_korean_market_analysis(self):
-        """한국 시장 분석 실행 (16:00 - 장 마감 후 분석)"""
-        print("\n🇰🇷 한국 시장 분석 시작 (16:00)")
+        """한국 시장 분석 실행 (16:30 - 데이터 수집 후 분석)"""
+        print("\n🇰🇷 한국 시장 분석 시작 (16:30)")
         print("="*50)
         
         try:
@@ -477,6 +560,11 @@ class GlobalScheduler:
             # 2. 한국 주식 예측
             print("🎯 한국 주식 예측...")
             kr_predictions = self.ml_engine.predict_stocks(MarketRegion.KR, top_n=10)
+            
+            # 🔥 학습용 예측 결과 저장 (실시간 학습 시스템용)
+            if kr_predictions:
+                print("💾 한국 시장 예측 결과 저장...")
+                self.ml_engine.save_predictions_for_learning(kr_predictions)
             
             # 3. 마감 후 요약 알림 전송
             print("📢 한국 시장 요약 알림...")
@@ -548,10 +636,27 @@ class GlobalScheduler:
         print("="*50)
         
         try:
-            # 미국 시장 마감 후 요약
+            # 1. 시장 체제 분석
+            print("📊 미국 시장 체제 분석...")
+            market_condition = self.ml_engine.detect_market_regime()
+            
+            # 2. 미국 주식 예측
+            print("🎯 미국 주식 예측...")
+            us_predictions = self.ml_engine.predict_stocks(MarketRegion.US, top_n=10)
+            
+            # 🔥 학습용 예측 결과 저장 (실시간 학습 시스템용)
+            if us_predictions:
+                print("💾 미국 시장 예측 결과 저장...")
+                self.ml_engine.save_predictions_for_learning(us_predictions)
+            
+            # 3. 마감 후 요약 알림 전송
+            print("📢 미국 시장 요약 알림...")
             us_summary = self.alert_system.generate_market_close_summary(MarketRegion.US)
             if us_summary:
                 await self.alert_system.send_alert(us_summary)
+            
+            # 4. 시장 전망 분석
+            print("🔍 글로벌 시장 체제 분석 중...")
             
             print("✅ 미국 시장 분석 완료")
             return True
@@ -562,7 +667,7 @@ class GlobalScheduler:
     
     def _collect_korean_data(self):
         """한국 데이터 수집"""
-        print("\n📊 한국 데이터 수집 시작 (17:00)")
+        print("\n📊 한국 데이터 수집 시작 (16:15)")
         
         try:
             # 통합 데이터 수집기 사용
@@ -666,6 +771,92 @@ class GlobalScheduler:
             print(f"❌ 주간 고도화 학습 오류: {e}")
             await self._send_weekly_training_notification(success=False, error=str(e))
             return False
+    
+    async def _run_daily_performance_evaluation(self):
+        """일일 성능 평가 (18:00 - 한국 장 마감 후 데이터 확정)"""
+        print("\n📊 일일 성능 평가 시작 (18:00)")
+        print("="*50)
+        
+        try:
+            from datetime import date, timedelta
+            from app.ml.realtime_learning_system import RealTimeLearningSystem
+            
+            # 전일 성능 평가 (당일 데이터는 아직 확정되지 않을 수 있음)
+            target_date = date.today() - timedelta(days=1)
+            
+            print(f"📅 평가 대상: {target_date}")
+            print("🔍 예측 vs 실제 수익률 비교 중...")
+            
+            learning_system = RealTimeLearningSystem()
+            
+            # 성능 평가 실행
+            performance = learning_system.evaluate_daily_performance(target_date)
+            
+            if performance:
+                print("✅ 성능 평가 완료")
+                
+                # 성과 요약
+                for region, perf in performance.items():
+                    market_name = "한국" if region == "KR" else "미국"
+                    flag = "🇰🇷" if region == "KR" else "🇺🇸"
+                    
+                    print(f"{flag} {market_name} 시장:")
+                    print(f"   정확도: {perf.accuracy_rate:.1f}%")
+                    print(f"   예측 개수: {perf.total_predictions}개")
+                    print(f"   상위5 정확도: {perf.top5_accuracy:.1f}%")
+                
+                # 성능 평가 알림
+                await self._send_performance_evaluation_notification(performance, target_date)
+                
+                return True
+            else:
+                print("❌ 성능 평가 실패 (데이터 부족)")
+                await self._send_performance_evaluation_notification(None, target_date, error="데이터 부족")
+                return False
+                
+        except Exception as e:
+            print(f"❌ 성능 평가 오류: {e}")
+            await self._send_performance_evaluation_notification(None, target_date, error=str(e))
+            return False
+    
+    async def _send_performance_evaluation_notification(self, performance, target_date: date, error: str = None):
+        """성능 평가 결과 알림"""
+        try:
+            if performance:
+                message = f"📊 {target_date} ML 성능 평가 완료\n\n"
+                
+                total_accuracy = 0
+                total_markets = 0
+                
+                for region, perf in performance.items():
+                    market_name = "한국" if region == "KR" else "미국"
+                    flag = "🇰🇷" if region == "KR" else "🇺🇸"
+                    
+                    message += f"{flag} {market_name}: {perf.accuracy_rate:.1f}% (상위5: {perf.top5_accuracy:.1f}%)\n"
+                    total_accuracy += perf.accuracy_rate
+                    total_markets += 1
+                
+                if total_markets > 0:
+                    avg_accuracy = total_accuracy / total_markets
+                    message += f"\n📈 평균 정확도: {avg_accuracy:.1f}%"
+                    
+                    # 성과 평가
+                    if avg_accuracy >= 70:
+                        message += "\n🎉 우수한 성능!"
+                    elif avg_accuracy >= 60:
+                        message += "\n✅ 양호한 성능"
+                    elif avg_accuracy >= 50:
+                        message += "\n📈 개선 중"
+                    else:
+                        message += "\n🔧 개선 필요"
+            else:
+                message = f"❌ {target_date} 성능 평가 실패\n{error if error else '알 수 없는 오류'}"
+            
+            print(f"📱 성능 평가 알림: {message}")
+            # await self.alert_system.send_admin_alert(message)
+            
+        except Exception as e:
+            print(f"⚠️ 성능 평가 알림 전송 실패: {e}")
     
     async def _send_daily_training_notification(self, success: bool, error: str = None):
         """일일 학습 결과 알림 (간단)"""

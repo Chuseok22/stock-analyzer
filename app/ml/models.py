@@ -46,6 +46,13 @@ class StockPredictionModel:
     Returns:
         Tuple of (features, target)
     """
+    # Ensure column name compatibility (close vs close_price)
+    df = self._ensure_column_compatibility(df)
+    
+    # Ensure proper sorting for time series operations
+    if 'date' in df.columns and 'stock_id' in df.columns:
+      df = df.sort_values(['stock_id', 'date']).reset_index(drop=True)
+    
     # Define feature columns (technical indicators)
     feature_cols = [
       'sma_5', 'sma_10', 'sma_20', 'sma_60',
@@ -78,12 +85,44 @@ class StockPredictionModel:
 
     return features_df, target
 
+  def _ensure_column_compatibility(self, df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure column name compatibility between different data sources."""
+    df = df.copy()
+    
+    # Handle close vs close_price
+    if 'close' in df.columns and 'close_price' not in df.columns:
+      df['close_price'] = df['close']
+    elif 'close_price' in df.columns and 'close' not in df.columns:
+      df['close'] = df['close_price']
+    
+    # Handle other common variations
+    column_mappings = {
+      'volume': 'volume',
+      'high': 'high_price',
+      'low': 'low_price',
+      'open': 'open_price'
+    }
+    
+    for alt_name, standard_name in column_mappings.items():
+      if alt_name in df.columns and standard_name not in df.columns:
+        df[standard_name] = df[alt_name]
+      elif standard_name in df.columns and alt_name not in df.columns:
+        df[alt_name] = df[standard_name]
+    
+    return df
+
   def _add_relative_features(self, df: pd.DataFrame) -> pd.DataFrame:
     """Add relative and derived features."""
     df = df.copy()
+    
+    # Small epsilon for numerical stability
+    EPS = 1e-8
 
-    # Price relative to moving averages
-    df['price_to_sma_20'] = df['close_price'] / df['sma_20'] - 1
+    # Price relative to moving averages (ensure close_price exists)
+    if 'close_price' not in df.columns and 'close' in df.columns:
+      df['close_price'] = df['close']
+    
+    df['price_to_sma_20'] = df['close_price'] / (df['sma_20'] + EPS) - 1
 
     # RSI levels
     df['rsi_level'] = pd.cut(df['rsi_14'],
@@ -93,20 +132,36 @@ class StockPredictionModel:
     # MACD histogram
     df['macd_histogram'] = df['macd'] - df['macd_signal']
 
-    # Bollinger Band position
-    df['bb_position'] = (df['close_price'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
+    # Bollinger Band position (with numerical stability)
+    bb_width = df['bb_upper'] - df['bb_lower']
+    df['bb_position'] = (df['close_price'] - df['bb_lower']) / (bb_width + EPS)
+    # Clip to reasonable range
+    df['bb_position'] = df['bb_position'].clip(-2, 3)
 
-    # Volume surge indicator
+    # Volume surge indicator (with safety check)
     df['volume_surge'] = (df['volume_ratio'] > 1.5).astype(int)
 
-    # Momentum features
-    df['momentum_5d'] = df.groupby('stock_id')['close_price'].pct_change(5)
+    # Momentum features (ensure proper grouping)
+    if 'stock_id' in df.columns:
+      df['momentum_5d'] = df.groupby('stock_id')['close_price'].pct_change(5)
+      # Trend strength (slope of SMA)
+      df['trend_strength'] = df.groupby('stock_id')['sma_20'].pct_change(5)
+      
+      # Rolling volatility rank (prevent look-ahead bias)
+      df['volatility_rank'] = df.groupby('stock_id')['volatility_20'].apply(
+        lambda x: x.rolling(window=60, min_periods=20).rank(pct=True)
+      ).reset_index(0, drop=True)
+    else:
+      # Fallback for single stock
+      df['momentum_5d'] = df['close_price'].pct_change(5)
+      df['trend_strength'] = df['sma_20'].pct_change(5)
+      df['volatility_rank'] = df['volatility_20'].rolling(
+        window=60, min_periods=20
+      ).rank(pct=True)
 
-    # Trend strength (slope of SMA)
-    df['trend_strength'] = df.groupby('stock_id')['sma_20'].pct_change(5)
-
-    # Volatility rank
-    df['volatility_rank'] = df.groupby('stock_id')['volatility_20'].rank(pct=True)
+    # Fill any remaining NaN values for numerical stability
+    for col in ['momentum_5d', 'trend_strength', 'volatility_rank']:
+      df[col] = df[col].fillna(0)
 
     return df
 
@@ -122,56 +177,108 @@ class StockPredictionModel:
     Returns:
         Training results dict
     """
+    # Validate input data
+    if len(X) == 0 or len(y) == 0:
+      raise ValueError("Training data is empty")
+    
+    if len(X) != len(y):
+      raise ValueError(f"Feature and target length mismatch: {len(X)} vs {len(y)}")
+    
+    # Check for minimum data requirements
+    if len(X) < 100:
+      logger.warning(f"Small dataset: {len(X)} samples. Results may be unreliable.")
+    
+    # Check class distribution for stratification
+    unique_classes = y.nunique()
+    if unique_classes < 2:
+      raise ValueError(f"Need at least 2 classes for training, got {unique_classes}")
+    
+    # Check if stratification is possible
+    min_class_size = y.value_counts().min()
+    use_stratify = min_class_size >= 2 and test_size > 0
+    
     # Split data
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=42, stratify=y
-    )
+    try:
+      if use_stratify:
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=42, stratify=y
+        )
+      else:
+        logger.warning("Cannot use stratification due to insufficient class samples")
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=42
+        )
+    except ValueError as e:
+      logger.error(f"Train-test split failed: {e}")
+      # Fallback to simple split
+      X_train, X_test, y_train, y_test = train_test_split(
+          X, y, test_size=test_size, random_state=42
+      )
 
     # Create and train pipeline
     self.scaler = RobustScaler()
-    self.model = self._create_model()
+    base_model = self._create_model()
+    
+    # Handle class imbalance for supported models
+    if hasattr(base_model, 'class_weight'):
+      base_model.set_params(class_weight='balanced')
 
     pipeline = Pipeline([
       ('scaler', self.scaler),
-      ('model', self.model)
+      ('model', base_model)
     ])
 
     logger.info(f"Training {self.model_name} on {len(X_train)} samples")
 
-    # Train model
-    pipeline.fit(X_train, y_train)
+    try:
+      # Train model
+      pipeline.fit(X_train, y_train)
+      
+      # Set the trained pipeline BEFORE calculating feature importance
+      self.model = pipeline
+      self.is_trained = True
 
-    # Evaluate
-    train_score = pipeline.score(X_train, y_train)
-    test_score = pipeline.score(X_test, y_test)
+      # Evaluate
+      train_score = pipeline.score(X_train, y_train)
+      test_score = pipeline.score(X_test, y_test)
 
-    # Predictions for detailed metrics
-    y_pred = pipeline.predict(X_test)
-    y_pred_proba = pipeline.predict_proba(X_test)[:, 1]
+      # Predictions for detailed metrics
+      y_pred = pipeline.predict(X_test)
+      y_pred_proba = pipeline.predict_proba(X_test)[:, 1]
 
-    # Calculate metrics
-    auc_score = roc_auc_score(y_test, y_pred_proba)
+      # Calculate metrics
+      auc_score = roc_auc_score(y_test, y_pred_proba)
 
-    # Cross validation
-    cv_scores = cross_val_score(pipeline, X_train, y_train, cv=5, scoring='roc_auc')
+      # Cross validation (with error handling)
+      try:
+        cv_scores = cross_val_score(pipeline, X_train, y_train, cv=5, scoring='roc_auc')
+        cv_mean = cv_scores.mean()
+        cv_std = cv_scores.std()
+      except Exception as e:
+        logger.warning(f"Cross-validation failed: {e}")
+        cv_mean = cv_std = 0.0
 
-    results = {
-      'train_accuracy': train_score,
-      'test_accuracy': test_score,
-      'auc_score': auc_score,
-      'cv_mean': cv_scores.mean(),
-      'cv_std': cv_scores.std(),
-      'classification_report': classification_report(y_test, y_pred),
-      'confusion_matrix': confusion_matrix(y_test, y_pred),
-      'feature_importance': self._get_feature_importance()
-    }
+      results = {
+        'train_accuracy': train_score,
+        'test_accuracy': test_score,
+        'auc_score': auc_score,
+        'cv_mean': cv_mean,
+        'cv_std': cv_std,
+        'classification_report': classification_report(y_test, y_pred),
+        'confusion_matrix': confusion_matrix(y_test, y_pred),
+        'feature_importance': self._get_feature_importance(),
+        'training_samples': len(X_train),
+        'test_samples': len(X_test),
+        'class_distribution': y.value_counts().to_dict()
+      }
 
-    self.model = pipeline
-    self.is_trained = True
+      logger.info(f"Training completed. Test AUC: {auc_score:.4f}")
+      return results
 
-    logger.info(f"Training completed. Test AUC: {auc_score:.4f}")
-
-    return results
+    except Exception as e:
+      logger.error(f"Training failed: {e}")
+      self.is_trained = False
+      raise
 
   def _create_model(self):
     """Create the base model. Override in subclasses."""
@@ -265,7 +372,8 @@ class LightGBMModel(StockPredictionModel):
         max_depth=6,
         learning_rate=0.1,
         subsample=0.8,
-        colsample_bytree=0.8,
+        feature_fraction=0.8,  # More explicit than colsample_bytree
+        class_weight='balanced',
         random_state=42,
         verbose=-1
     )
@@ -283,6 +391,7 @@ class RandomForestModel(StockPredictionModel):
         max_depth=10,
         min_samples_split=5,
         min_samples_leaf=2,
+        class_weight='balanced',
         random_state=42
     )
 
@@ -380,6 +489,44 @@ class EnsembleModel(StockPredictionModel):
     proba = self._ensemble_predict_proba(X)
     return (proba >= 0.5).astype(int)
 
+  def save_model(self) -> str:
+    """Save ensemble model to disk."""
+    if not self.is_trained:
+      raise ValueError("Model must be trained before saving")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{self.model_name}_{timestamp}.joblib"
+    filepath = os.path.join(self.model_dir, filename)
+
+    model_data = {
+      'models': self.models,  # Save individual models dict
+      'weights': self.weights,  # Save model weights
+      'feature_columns': self.feature_columns,
+      'model_name': self.model_name,
+      'trained_at': timestamp
+    }
+
+    joblib.dump(model_data, filepath)
+    logger.info(f"Ensemble model saved to {filepath}")
+
+    return filepath
+
+  def load_model(self, filepath: str) -> bool:
+    """Load ensemble model from disk."""
+    try:
+      model_data = joblib.load(filepath)
+      self.models = model_data['models']
+      self.weights = model_data['weights']
+      self.feature_columns = model_data['feature_columns']
+      self.is_trained = True
+
+      logger.info(f"Ensemble model loaded from {filepath}")
+      return True
+
+    except Exception as e:
+      logger.error(f"Failed to load ensemble model: {e}")
+      return False
+
 
 class ModelTrainer:
   """Model training and evaluation coordinator."""
@@ -439,10 +586,17 @@ class ModelTrainer:
         logger.error(f"Failed to train {name}: {e}")
         results[name] = { 'error': str(e) }
 
+    # Ensure we have a best model
+    if self.best_model is None:
+      logger.warning("No models were successfully trained")
+      return results
+
     logger.info(f"Best model: {self.best_model.model_name} (AUC: {self.best_score:.4f})")
 
     return results
 
   def get_best_model(self) -> Optional[StockPredictionModel]:
     """Get the best performing model."""
+    if self.best_model is None:
+      logger.warning("No best model available. Train models first.")
     return self.best_model

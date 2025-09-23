@@ -134,14 +134,16 @@ class RealTimeLearningSystem:
             
             self.logger.info(f"{len(prediction_data)}개 예측 결과 저장 완료")
             
-            # 시장별 예측 개수 로깅
+            # 시장별 예측 개수 로깅 (필터링된 데이터 전달)
             market_counts = {}
             for pred in predictions:
                 market = pred.market_region
                 market_counts[market] = market_counts.get(market, 0) + 1
             
             for market, count in market_counts.items():
-                self.logger.log_prediction_result(market, prediction_data, accuracy=None)
+                # 시장별로 필터링된 예측 데이터만 전달
+                market_predictions = [p for p in prediction_data if p['market_region'] == market]
+                self.logger.log_prediction_result(market, market_predictions, accuracy=None)
             
             return True
             
@@ -208,8 +210,8 @@ class RealTimeLearningSystem:
             self.logger.error(f"실제 수익률 계산 실패: {e}")
             return {}
     
-    def evaluate_daily_performance(self, target_date: date) -> Optional[ModelPerformance]:
-        """당일 모델 성능 평가"""
+    def evaluate_daily_performance(self, target_date: date) -> Optional[Dict[str, ModelPerformance]]:
+        """당일 모델 성능 평가 - 반환 타입 수정"""
         self.logger.info(f"{target_date} 모델 성능 평가 시작...")
         
         try:
@@ -239,8 +241,9 @@ class RealTimeLearningSystem:
                 if not region_predictions:
                     continue
                 
+                # 예측별로 실제 수익률과 매칭 가능한 케이스 카운트
+                matched_predictions = []
                 accurate_count = 0
-                total_predictions = len(region_predictions)
                 prediction_errors = []
                 predicted_values = []
                 actual_values = []
@@ -251,6 +254,8 @@ class RealTimeLearningSystem:
                     if key in actual_returns:
                         predicted_return = pred['predicted_return']
                         actual_return = actual_returns[key]
+                        
+                        matched_predictions.append(pred)
                         
                         # 방향성 정확도 (예측과 실제가 같은 방향인지)
                         if (predicted_return > 0 and actual_return > 0) or \
@@ -264,15 +269,21 @@ class RealTimeLearningSystem:
                         predicted_values.append(predicted_return)
                         actual_values.append(actual_return)
                 
-                if prediction_errors:
+                if matched_predictions:
+                    # 분모/분자 일치: 매칭된 예측만으로 정확도 계산
+                    total_matched = len(matched_predictions)
+                    total_predictions = len(region_predictions)
+                    coverage_rate = (total_matched / total_predictions) * 100
+                    accuracy_rate = (accurate_count / total_matched) * 100  # 매칭된 케이스 기준
+                    
                     # 성능 지표 계산
-                    accuracy_rate = (accurate_count / total_predictions) * 100
                     avg_error = np.mean(prediction_errors)
                     rmse = np.sqrt(np.mean([(p - a) ** 2 for p, a in zip(predicted_values, actual_values)]))
                     mae = np.mean([abs(p - a) for p, a in zip(predicted_values, actual_values)])
                     
-                    # 상위 5개 추천의 정확도
-                    top5_predictions = region_predictions[:5]
+                    # 상위 5개 추천의 정확도 (정렬 후 선택)
+                    sorted_predictions = sorted(matched_predictions, key=lambda x: x['predicted_return'], reverse=True)
+                    top5_predictions = sorted_predictions[:5]
                     top5_accurate = 0
                     
                     for pred in top5_predictions:
@@ -280,7 +291,10 @@ class RealTimeLearningSystem:
                         if key in actual_returns:
                             predicted = pred['predicted_return']
                             actual = actual_returns[key]
-                            if (predicted > 0 and actual > 0) or (predicted < 0 and actual < 0):
+                            # 방향성 판정 (본문과 동일한 룰)
+                            if (predicted > 0 and actual > 0) or \
+                               (predicted < 0 and actual < 0) or \
+                               (abs(predicted) < 0.5 and abs(actual) < 0.5):
                                 top5_accurate += 1
                     
                     top5_accuracy = (top5_accurate / min(5, len(top5_predictions))) * 100
@@ -298,16 +312,18 @@ class RealTimeLearningSystem:
                     )
                     
                     self.logger.info(f"{region} 시장 성능 평가 완료")
-                    self.logger.info(f"  정확도: {accuracy_rate:.1f}%, 평균 오차: {avg_error:.2f}%, 상위5 정확도: {top5_accuracy:.1f}%")
+                    self.logger.info(f"  정확도: {accuracy_rate:.1f}%, 커버리지: {coverage_rate:.1f}%, 평균 오차: {avg_error:.2f}%, 상위5 정확도: {top5_accuracy:.1f}%")
                     
-                    # 성능 로그 기록
+                    # 성능 로그 기록 (커버리지 포함)
                     self.logger.log_performance({
                         "type": "daily_evaluation",
                         "market": region,
                         "accuracy_rate": accuracy_rate,
+                        "coverage_rate": coverage_rate,
                         "avg_error": avg_error,
                         "top5_accuracy": top5_accuracy,
-                        "total_predictions": total_predictions
+                        "total_predictions": total_predictions,
+                        "matched_predictions": total_matched
                     })
             
             # 성능 결과 저장
@@ -604,47 +620,18 @@ class RealTimeLearningSystem:
             return strategy
     
     def _intensive_training(self, strategy: Dict[str, Any]) -> bool:
-        """집중 학습 (성능 저하 시) - 배포 환경 최적화"""
+        """집중 학습 (성능 저하 시) - 직접 메서드 호출"""
         print("🔥 집중 학습 모드 (배포 환경 최적화)...")
         
         try:
-            # 배포 환경에서는 시간이 오래 걸려도 괜찮으므로 최대한 많은 데이터 활용
-            print("📊 대량 데이터 수집 및 전처리...")
-            
             # 기존 모델 백업
             self._backup_current_models()
             
-            # 집중 학습 설정
-            intensive_config = {
-                'max_features': 'sqrt',  # 모든 피처 사용
-                'n_estimators': 500,     # 트리 개수 대폭 증가
-                'max_depth': 15,         # 깊이 증가
-                'min_samples_split': 5,  # 더 세밀한 분할
-                'min_samples_leaf': 2,   # 리프 노드 최소값 감소
-                'random_state': 42,
-                'n_jobs': -1,           # 모든 CPU 활용
-                'verbose': 1            # 진행상황 표시
-            }
-            
-            print(f"🎯 집중 학습 설정: {intensive_config}")
             print("⏱️ 배포 환경 - 시간 제한 없이 최고 정확도 추구...")
+            print("🎯 집중 학습 설정으로 모델 재학습...")
             
-            # 더 긴 기간의 데이터로 학습 (최대 2년)
-            from datetime import datetime, timedelta
-            end_date = datetime.now().date()
-            start_date = end_date - timedelta(days=730)  # 2년간 데이터
-            
-            print(f"📅 학습 기간: {start_date} ~ {end_date} (2년간)")
-            
-            # GlobalMLEngine에 집중 학습 설정 전달
-            original_config = getattr(self.ml_engine, 'model_config', {})
-            self.ml_engine.model_config = intensive_config
-            
-            # 집중 학습 실행
-            success = self.ml_engine.train_global_models()
-            
-            # 설정 복원
-            self.ml_engine.model_config = original_config
+            # 집중 학습 직접 호출 (강한 결합)
+            success = self.ml_engine.train_global_models_intensive(use_intensive_config=True)
             
             if success:
                 print("✅ 집중 학습 완료 - 최고 정확도 달성!")
@@ -715,11 +702,11 @@ class RealTimeLearningSystem:
             return False
     
     def _backup_current_models(self):
-        """현재 모델 백업"""
+        """현재 모델 백업 - 엔진 경로 참조"""
         try:
             from shutil import copy2
             
-            model_dir = Path("storage/models/global")
+            model_dir = self.ml_engine.model_dir  # 하드코딩 제거
             backup_dir = model_dir / "backups"
             backup_dir.mkdir(exist_ok=True)
             
@@ -729,17 +716,17 @@ class RealTimeLearningSystem:
                 backup_file = backup_dir / f"{model_file.stem}_{timestamp}.joblib"
                 copy2(model_file, backup_file)
             
-            print("📦 모델 백업 완료")
+            print(f"📦 모델 백업 완료: {backup_dir}")
             
         except Exception as e:
             print(f"❌ 모델 백업 실패: {e}")
     
     def _restore_backup_models(self):
-        """백업 모델 복원"""
+        """백업 모델 복원 - 엔진 경로 참조"""
         try:
             from shutil import copy2
             
-            model_dir = Path("storage/models/global")
+            model_dir = self.ml_engine.model_dir  # 하드코딩 제거
             backup_dir = model_dir / "backups"
             
             # 가장 최근 백업 찾기
@@ -747,90 +734,26 @@ class RealTimeLearningSystem:
             if backup_files:
                 backup_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
                 
+                # 백업 파일들을 원본 이름으로 복원
+                restored_files = set()
                 for backup_file in backup_files:
-                    original_name = "_".join(backup_file.stem.split("_")[:-2]) + ".joblib"
-                    original_file = model_dir / original_name
-                    copy2(backup_file, original_file)
+                    # 타임스탬프 제거하여 원본 파일명 생성
+                    name_parts = backup_file.stem.split("_")
+                    if len(name_parts) >= 3:  # name_timestamp 형태
+                        original_name = "_".join(name_parts[:-2]) + ".joblib"
+                        original_file = model_dir / original_name
+                        
+                        # 이미 복원된 파일은 건너뛰기 (최신 백업 우선)
+                        if original_name not in restored_files:
+                            copy2(backup_file, original_file)
+                            restored_files.add(original_name)
                 
-                print("🔄 백업 모델 복원 완료")
+                print(f"🔄 백업 모델 복원 완료: {len(restored_files)}개 파일")
+            else:
+                print("⚠️ 복원할 백업 파일 없음")
             
         except Exception as e:
             print(f"❌ 모델 복원 실패: {e}")
-    
-    def generate_performance_report(self, target_date: date, days: int = 30) -> str:
-        """성능 리포트 생성"""
-        print(f"📊 {days}일간 성능 리포트 생성...")
-        
-        try:
-            performances = {'KR': [], 'US': []}
-            dates = []
-            
-            # 최근 N일 성능 데이터 수집
-            for i in range(days):
-                check_date = target_date - timedelta(days=i)
-                performance_file = self.performance_dir / f"performance_{check_date.strftime('%Y%m%d')}.json"
-                
-                if performance_file.exists():
-                    with open(performance_file, 'r', encoding='utf-8') as f:
-                        perf_data = json.load(f)
-                    
-                    dates.append(check_date)
-                    for region in ['KR', 'US']:
-                        if region in perf_data:
-                            performances[region].append(perf_data[region])
-                        else:
-                            performances[region].append(None)
-            
-            # 리포트 생성
-            report = f"📈 **ML 모델 성능 리포트** ({days}일간)\n"
-            report += f"📅 기간: {(target_date - timedelta(days=days-1)).strftime('%Y-%m-%d')} ~ {target_date.strftime('%Y-%m-%d')}\n\n"
-            
-            for region in ['KR', 'US']:
-                valid_perfs = [p for p in performances[region] if p is not None]
-                
-                if valid_perfs:
-                    accuracies = [p['accuracy_rate'] for p in valid_perfs]
-                    top5_accuracies = [p['top5_accuracy'] for p in valid_perfs]
-                    avg_errors = [p['avg_prediction_error'] for p in valid_perfs]
-                    
-                    market_name = "한국" if region == "KR" else "미국"
-                    flag = "🇰🇷" if region == "KR" else "🇺🇸"
-                    
-                    report += f"{flag} **{market_name} 시장 성과**\n"
-                    report += f"• 평균 정확도: {np.mean(accuracies):.1f}%\n"
-                    report += f"• 최고 정확도: {np.max(accuracies):.1f}%\n"
-                    report += f"• 최저 정확도: {np.min(accuracies):.1f}%\n"
-                    report += f"• 상위5 평균 정확도: {np.mean(top5_accuracies):.1f}%\n"
-                    report += f"• 평균 예측 오차: {np.mean(avg_errors):.2f}%\n"
-                    
-                    # 최근 추세
-                    recent_accuracies = accuracies[-7:] if len(accuracies) >= 7 else accuracies
-                    if len(recent_accuracies) >= 2:
-                        trend = "상승" if recent_accuracies[-1] > recent_accuracies[0] else "하락"
-                        report += f"• 최근 추세: {trend}\n"
-                    
-                    report += "\n"
-            
-            # 개선 제안
-            report += "🎯 **개선 제안**\n"
-            for region in ['KR', 'US']:
-                valid_perfs = [p for p in performances[region] if p is not None]
-                if valid_perfs:
-                    avg_accuracy = np.mean([p['accuracy_rate'] for p in valid_perfs])
-                    market_name = "한국" if region == "KR" else "미국"
-                    
-                    if avg_accuracy < 55:
-                        report += f"• {market_name}: 집중 학습 필요 (정확도 {avg_accuracy:.1f}%)\n"
-                    elif avg_accuracy > 70:
-                        report += f"• {market_name}: 우수한 성능 유지 중 (정확도 {avg_accuracy:.1f}%)\n"
-                    else:
-                        report += f"• {market_name}: 안정적 성능 (정확도 {avg_accuracy:.1f}%)\n"
-            
-            return report
-            
-        except Exception as e:
-            print(f"❌ 성능 리포트 생성 실패: {e}")
-            return "성능 리포트 생성 실패"
     
     def run_daily_learning_cycle(self, target_date: date = None) -> bool:
         """일일 학습 사이클 실행"""

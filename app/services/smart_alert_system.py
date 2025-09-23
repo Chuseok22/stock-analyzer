@@ -119,8 +119,9 @@ class SmartAlertSystem:
             market_schedule = self.market_time_manager.get_market_schedule_info()
             dst_status = self.market_time_manager.format_dst_status()
             
-            # 알림 메시지 구성
-            title = "🇺🇸 미국 프리마켓 추천 종목 (장 시작 30분 전)"
+            # 알림 메시지 구성 (한국 시간대 명시)
+            kr_time_str = datetime.now(self.kr_timezone).strftime('%m/%d %H:%M KST')
+            title = f"🇺🇸 미국 프리마켓 추천 종목 ({kr_time_str})"
             
             # 시장 운영 시간 정보 추가
             time_info = f"🕐 **오늘 미국 시장 운영 시간**\n"
@@ -255,8 +256,9 @@ class SmartAlertSystem:
             # 시장 체제 분석
             market_condition = self.ml_engine.detect_market_regime()
             
-            # 제목 생성
-            title = f"🇰🇷 한국 주식 프리마켓 추천 ({datetime.now().strftime('%m/%d %H:%M')})"
+            # 제목 생성 (한국 시간대 명시)
+            kr_time_str = datetime.now(self.kr_timezone).strftime('%m/%d %H:%M KST')
+            title = f"🇰🇷 한국 주식 프리마켓 추천 ({kr_time_str})"
             
             # 메시지 구성
             message_lines = [
@@ -375,8 +377,9 @@ class SmartAlertSystem:
             if overall_negative < 0.5:
                 return None
             
-            # 경고 메시지 구성
-            title = "🚨 하락장 경고 - 포지션 정리 권고"
+            # 경고 메시지 구성 (한국 시간대 명시)
+            kr_time_str = datetime.now(self.kr_timezone).strftime('%m/%d %H:%M KST')
+            title = f"🚨 하락장 경고 - 포지션 정리 권고 ({kr_time_str})"
             
             severity_level = "위험" if market_condition.regime == MarketRegime.BEAR_MARKET else "심각"
             
@@ -482,9 +485,10 @@ class SmartAlertSystem:
             max_return = max(predictions, key=lambda x: x.predicted_return)
             min_return = min(predictions, key=lambda x: x.predicted_return)
             
-            # 제목 및 시장 정보
+            # 제목 및 시장 정보 (한국 시간대 명시)
             market_name = "한국" if region == MarketRegion.KR else "미국"
-            title = f"📊 {market_name} 시장 마감 후 분석 요약"
+            kr_time_str = datetime.now(self.kr_timezone).strftime('%m/%d %H:%M KST')
+            title = f"📊 {market_name} 시장 마감 후 분석 요약 ({kr_time_str})"
             
             # 내일 시장 시간 정보 (미국 시장용)
             time_info = ""
