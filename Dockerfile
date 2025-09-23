@@ -91,8 +91,12 @@ RUN mkdir -p /app/data \
              /app/storage/analysis_reports \
              /app/temp
 
-# 디렉토리 소유권 변경
-RUN chown -R appuser:appgroup /app
+# 디렉토리 소유권 및 권한 설정
+RUN chown -R appuser:appgroup /app && \
+    chmod -R 755 /app && \
+    chmod -R 777 /app/logs && \
+    chmod -R 777 /app/storage && \
+    chmod -R 777 /app/temp
 
 # 볼륨 마운트 포인트 설정 (외부 데이터 연동)
 VOLUME ["/app/data", "/app/logs"]
