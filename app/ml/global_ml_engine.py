@@ -1115,7 +1115,7 @@ class GlobalMLEngine:
             return [], []
     
     def predict_stocks(self, region: MarketRegion, top_n: int = 5) -> List[GlobalPrediction]:
-        """주식 예측 실행"""
+        """주식 예측 실행 - 모델 없으면 자동 학습"""
         print(f"🎯 {region.value} 주식 예측 중... (상위 {top_n}개)")
         
         predictions = []
@@ -1125,10 +1125,35 @@ class GlobalMLEngine:
             if region.value not in self.models:
                 self._load_model(region)
             
+            # 모델이 여전히 없으면 자동 학습 수행
             if region.value not in self.models:
-                print(f"   ❌ {region.value} 모델 없음")
-                return []
+                print(f"   ⚠️ {region.value} 모델 없음 - 자동 학습 시작...")
+                
+                # 긴급 학습 수행
+                try:
+                    print(f"   🚀 {region.value} 긴급 ML 모델 학습 시작...")
+                    success = self._train_market_model(region, {
+                        'n_estimators': 100,  # 빠른 학습용
+                        'max_depth': 10,
+                        'random_state': 42,
+                        'n_jobs': -1
+                    })
+                    
+                    if success:
+                        print(f"   ✅ {region.value} 긴급 학습 완료")
+                    else:
+                        print(f"   ❌ {region.value} 긴급 학습 실패")
+                        return []
+                        
+                except Exception as e:
+                    print(f"   ❌ {region.value} 긴급 학습 오류: {e}")
+                    return []
             
+            # 모델 최종 확인
+            if region.value not in self.models:
+                print(f"   ❌ {region.value} 모델 여전히 없음")
+                return []
+
             model = self.models[region.value]
             scaler = self.scalers[region.value]
             
@@ -1139,7 +1164,28 @@ class GlobalMLEngine:
                     is_active=True
                 ).all()
                 
-                target_date = datetime.now().date() - timedelta(days=1)  # 하루 전 데이터 사용
+                # 현재 시간 기준으로 적절한 날짜 결정
+                now = datetime.now()
+                current_time = now.time()
+                
+                # 시장별 데이터 가용 시간 기준
+                if region == MarketRegion.KR:
+                    # 한국 시장: 16:00(장 마감) 이후면 당일 데이터 사용
+                    if current_time.hour >= 16:
+                        target_date = now.date()  # 당일 데이터
+                    else:
+                        target_date = now.date() - timedelta(days=1)  # 전일 데이터
+                else:
+                    # 미국 시장: 05:30(한국시간 장 마감 후) ~ 17:00 사이면 당일 데이터
+                    hour = current_time.hour
+                    minute = current_time.minute
+                    
+                    if (hour == 5 and minute >= 30) or (6 <= hour <= 16):
+                        target_date = now.date()  # 당일 데이터
+                    else:
+                        target_date = now.date() - timedelta(days=1)  # 전일 데이터
+                
+                print(f"🗓️ {region.value} 예측 기준일: {target_date} ({'당일' if target_date == now.date() else '전일'} 데이터)")
                 
                 for stock in stocks:
                     try:
