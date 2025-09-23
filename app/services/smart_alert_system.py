@@ -243,6 +243,112 @@ class SmartAlertSystem:
             print(f"   ❌ 프리마켓 알림 생성 실패: {e}")
             return None
     
+    async def generate_korean_premarket_recommendations(self, predictions: List[GlobalPrediction]) -> Optional[SmartAlert]:
+        """한국 프리마켓 추천 알림 생성 (08:30 - 장 시작 30분 전)"""
+        print("🇰🇷 한국 프리마켓 추천 알림 생성 중...")
+        
+        try:
+            if not predictions:
+                print("   ⚠️ 예측 데이터 없음")
+                return None
+            
+            # 시장 체제 분석
+            market_condition = self.ml_engine.detect_market_regime()
+            
+            # 제목 생성
+            title = f"🇰🇷 한국 주식 프리마켓 추천 ({datetime.now().strftime('%m/%d %H:%M')})"
+            
+            # 메시지 구성
+            message_lines = [
+                f"📊 **한국 시장 프리마켓 분석**",
+                f"🕘 장 시작까지 30분 남음 (09:00 개장)",
+                "",
+                f"🎯 **시장 체제**: {market_condition.regime.value}",
+                f"📈 **리스크 레벨**: {market_condition.risk_level}",
+                f"💪 **트렌드 강도**: {market_condition.trend_strength:.2f}",
+                "",
+                "🏆 **오늘의 추천 종목**"
+            ]
+            
+            # 상위 5개 종목 정보
+            stock_info = []
+            for i, pred in enumerate(predictions[:5], 1):
+                symbol = pred.stock_code  # stock_code 속성 사용
+                score = pred.predicted_return
+                confidence = pred.confidence_score
+                direction = "📈 상승" if score > 0 else "📉 하락"
+                
+                stock_info.append({
+                    "symbol": symbol,
+                    "score": score,
+                    "confidence": confidence,
+                    "direction": direction
+                })
+                
+                message_lines.append(
+                    f"{i}. **{symbol}** {direction} (신뢰도: {confidence:.1%})"
+                )
+            
+            # 투자 조언 생성
+            recommendations = []
+            
+            # 시장 상황에 따른 조언
+            if market_condition.risk_level == "CRITICAL":
+                recommendations.extend([
+                    "🚨 극도로 위험한 시장 상황입니다",
+                    "💰 포지션 크기를 최소화하세요", 
+                    "🛡️ 손절가를 엄격히 준수하세요",
+                    "📊 장 초반 30분은 관망하는 것을 권장합니다"
+                ])
+            elif market_condition.risk_level == "HIGH":
+                recommendations.extend([
+                    "⚠️ 높은 리스크 환경입니다",
+                    "📊 분할 매수를 고려하세요",
+                    "🔍 시장 상황을 면밀히 모니터링하세요",
+                    "💡 개장 직후 급등락에 주의하세요"
+                ])
+            else:
+                recommendations.extend([
+                    "💡 한국 시장 개장까지 약 30분 남았습니다",
+                    "📈 프리마켓 분석을 참고하세요",
+                    "🎯 계획된 진입점을 준수하세요",
+                    "📊 09:00 개장 후 첫 10분간 거래량을 확인하세요"
+                ])
+            
+            # 최종 메시지
+            message = "\n".join(message_lines)
+            
+            if recommendations:
+                message += "\n\n🎯 **투자 조언**\n"
+                message += "\n".join(f"• {rec}" for rec in recommendations)
+            
+            # 면책조항
+            message += "\n\n⚠️ *본 정보는 투자 참고용이며, 투자 결정은 본인 책임입니다.*"
+            
+            # 긴급도 결정
+            urgency_level = "HIGH" if market_condition.risk_level in ["HIGH", "CRITICAL"] else "MEDIUM"
+            
+            alert = SmartAlert(
+                alert_type=AlertType.PREMARKET_RECOMMENDATIONS,
+                market_region="KR",
+                title=title,
+                message=message,
+                stocks=stock_info,
+                urgency_level=urgency_level,
+                action_required=True,
+                recommendations=recommendations,
+                created_at=datetime.now()
+            )
+            
+            print("   ✅ 한국 프리마켓 알림 생성 완료")
+            return alert
+            
+        except Exception as e:
+            print(f"   ❌ 한국 프리마켓 알림 생성 실패: {e}")
+            import traceback
+            print(f"   상세 오류: {traceback.format_exc()}")
+            return None
+    
     def generate_bear_market_warning(self) -> Optional[SmartAlert]:
         """하락장 경고 알림 생성"""
         print("🐻 하락장 경고 알림 검사 중...")

@@ -88,8 +88,9 @@ class GlobalScheduler:
             analysis_minute -= 60
         market_analysis_time = f"{analysis_hour:02d}:{analysis_minute:02d}"
         
-        # 1. 한국 시장 관련 스케줄 (고정)
-        schedule.every().day.at("16:00").do(self._run_korean_market_analysis).tag("kr_market")
+        # 1. 한국 시장 관련 스케줄
+        schedule.every().day.at("08:30").do(self._run_korean_premarket_recommendations).tag("kr_premarket")  # 한국 장 시작 30분 전
+        schedule.every().day.at("16:00").do(self._run_korean_market_analysis).tag("kr_market")  # 한국 장 마감 후 분석
         
         # 2. 미국 시장 관련 스케줄 (동적)
         schedule.every().day.at(premarket_start_kr).do(self._run_us_premarket_alert).tag("us_premarket")
@@ -104,20 +105,25 @@ class GlobalScheduler:
         schedule.every().saturday.at("02:00").do(self._run_weekly_ml_training).tag("ml_training")
         schedule.every(30).days.at("03:00").do(self._run_monthly_ml_training).tag("ml_monthly")  # 매 30일
         
-        # 5. 시스템 헬스체크
+        # 5. KIS API 토큰 재발급 (매일 자정)
+        schedule.every().day.at("00:00").do(self._refresh_kis_token).tag("kis_token")
+        
+        # 6. 시스템 헬스체크
         schedule.every().hour.at(":00").do(self._health_check).tag("health")
         
-        # 6. 긴급 알림 체크
+        # 7. 긴급 알림 체크
         schedule.every(4).hours.do(self._check_emergency_alerts).tag("emergency")
         
         print("✅ 동적 스케줄 설정 완료:")
+        print(f"   🇰🇷 한국 프리마켓 추천: 매일 08:30")
         print(f"   📈 한국 시장 분석: 매일 16:00")
         print(f"   🇺🇸 미국 프리마켓: 매일 {premarket_start_kr} (ET 04:00)")
         print(f"   🇺🇸 미국 정규장 시작: 매일 {regular_start_kr} (ET 09:30)")
         print(f"   📊 미국 시장 분석: 매일 {market_analysis_time} (ET 16:30)")
         print(f"   📁 미국 데이터 수집: 매일 {aftermarket_end_kr} (ET 20:30)")
         print(f"   🤖 ML 재학습: 매주 토요일 02:00")
-        print(f"   🚨 긴급 알림: 4시간마다")
+        print(f"   � KIS 토큰 재발급: 매일 00:00")
+        print(f"   �🚨 긴급 알림: 4시간마다")
         print(f"   ⏰ {dst_status}")
     
     def _run_initial_bootstrap(self):
@@ -199,44 +205,55 @@ class GlobalScheduler:
             return False
     
     def _bootstrap_ml_models(self):
-        """ML 모델 부트스트랩"""
+        """ML 모델 부트스트랩 - 실제 모델 학습 수행"""
         try:
             print("   🤖 글로벌 ML 모델 훈련 시작...")
             
-            # 간단한 ML 모델 초기화
-            # 실제 모델 훈련 대신 모델 존재 여부만 확인
+            # 실제 ML 모델 학습 수행
             try:
-                # ML 엔진 초기화 확인
-                if hasattr(self.ml_engine, 'models'):
-                    print("   ✅ ML 엔진 초기화 확인")
+                # ML 엔진을 통한 전체 모델 학습
+                print("   🔄 모델 학습 실행 중...")
+                success = self.ml_engine.train_global_models()
+                
+                if success:
+                    print("   ✅ ML 모델 학습 완료")
+                    
+                    # 학습 후 예측 기능 테스트
+                    print("   🎯 모델 예측 기능 테스트...")
+                    
+                    # 한국 예측 테스트
+                    try:
+                        from app.models.entities import MarketRegion
+                        kr_predictions = self.ml_engine.predict_stocks(MarketRegion.KOREA, top_n=3)
+                        if kr_predictions:
+                            print(f"   🇰🇷 한국 예측 성공 ({len(kr_predictions)}개 종목)")
+                        else:
+                            print("   ⚠️ 한국 예측 결과 없음")
+                    except Exception as e:
+                        print(f"   ⚠️ 한국 예측 테스트 실패: {e}")
+                    
+                    # 미국 예측 테스트
+                    try:
+                        us_predictions = self.ml_engine.predict_stocks(MarketRegion.US, top_n=3)
+                        if us_predictions:
+                            print(f"   🇺🇸 미국 예측 성공 ({len(us_predictions)}개 종목)")
+                        else:
+                            print("   ⚠️ 미국 예측 결과 없음")
+                    except Exception as e:
+                        print(f"   ⚠️ 미국 예측 테스트 실패: {e}")
+                    
+                    self.last_ml_training = datetime.now()
+                    print("   ✅ ML 모델 부트스트랩 완료")
+                    return True
+                    
                 else:
-                    print("   ⚠️ ML 엔진 부분 초기화")
-                
-                # 간단한 예측 테스트
-                print("   🎯 모델 예측 기능 테스트...")
-                
-                # 한국 예측 테스트 (간소화)
-                try:
-                    print("   🇰🇷 한국 예측 기능 확인")
-                    # kr_predictions = self.ml_engine.predict_stocks(MarketRegion.KR, top_n=5)
-                    print("   🇰🇷 한국 예측 준비 완료")
-                except Exception as e:
-                    print(f"   ⚠️ 한국 예측 테스트 스킵: {e}")
-                
-                # 미국 예측 테스트 (간소화)
-                try:
-                    print("   🇺🇸 미국 예측 기능 확인")
-                    # us_predictions = self.ml_engine.predict_stocks(MarketRegion.US, top_n=5)
-                    print("   🇺🇸 미국 예측 준비 완료")
-                except Exception as e:
-                    print(f"   ⚠️ 미국 예측 테스트 스킵: {e}")
-                
-                self.last_ml_training = datetime.now()
-                print("   ✅ ML 모델 부트스트랩 완료")
-                return True
+                    print("   ❌ ML 모델 학습 실패")
+                    return False
                 
             except Exception as e:
-                print(f"   ❌ ML 모델 초기화 실패: {e}")
+                print(f"   ❌ ML 모델 학습 실패: {e}")
+                import traceback
+                print(f"   상세 오류: {traceback.format_exc()}")
                 return False
                 
         except Exception as e:
@@ -358,8 +375,51 @@ class GlobalScheduler:
         print("⚠️ 레거시 스케줄 메서드 호출됨 - _setup_dynamic_schedules 사용 권장")
         self._setup_dynamic_schedules()
     
+    async def _run_korean_premarket_recommendations(self):
+        """한국 프리마켓 추천 실행 (08:30 - 장 시작 30분 전)"""
+        print("\n🇰🇷 한국 프리마켓 추천 시작 (08:30)")
+        print("="*50)
+        
+        try:
+            # 1. 한국 시장 프리마켓 추천 생성
+            from app.models.entities import MarketRegion
+            
+            # Mock 데이터 사용 여부 확인 (테스트용)
+            if hasattr(self.ml_engine, '_mock_predictions'):
+                print("🧪 테스트용 Mock 예측 데이터 사용")
+                predictions = self.ml_engine._mock_predictions
+            else:
+                # ML 엔진을 통한 추천 생성
+                predictions = self.ml_engine.predict_stocks(MarketRegion.KOREA, top_n=5)
+            
+            if predictions:
+                # 스마트 알림 시스템을 통한 추천 메시지 생성
+                premarket_alert = await self.alert_system.generate_korean_premarket_recommendations(predictions)
+                
+                if premarket_alert:
+                    # 알림 전송
+                    success = await self.alert_system.send_alert(premarket_alert)
+                    if success:
+                        print("✅ 한국 프리마켓 추천 전송 완료")
+                        return True
+                    else:
+                        print("❌ 한국 프리마켓 추천 전송 실패")
+                        return False
+                else:
+                    print("⚠️ 한국 프리마켓 추천 생성 실패")
+                    return False
+            else:
+                print("⚠️ ML 예측 결과 없음")
+                return False
+                
+        except Exception as e:
+            print(f"❌ 한국 프리마켓 추천 실패: {e}")
+            import traceback
+            print(f"상세 오류: {traceback.format_exc()}")
+            return False
+    
     async def _run_korean_market_analysis(self):
-        """한국 시장 분석 실행"""
+        """한국 시장 분석 실행 (16:00 - 장 마감 후 분석)"""
         print("\n🇰🇷 한국 시장 분석 시작 (16:00)")
         print("="*50)
         
@@ -775,6 +835,23 @@ class GlobalScheduler:
                 # 예정된 작업 실행
                 schedule.run_pending()
                 
+                # 현재 시간과 등록된 작업 수 로깅 (5분마다)
+                current_minute = datetime.now().minute
+                if current_minute % 5 == 0:
+                    print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')} - 등록된 작업: {len(schedule.jobs)}개")
+                    
+                    # 실행 대기 중인 작업이 있는지 확인
+                    pending_jobs = []
+                    for job in schedule.jobs:
+                        if job.should_run:
+                            pending_jobs.append(job)
+                    
+                    if pending_jobs:
+                        print(f"🚀 실행 대기 중인 작업: {len(pending_jobs)}개")
+                        for job in pending_jobs:
+                            tag = list(job.tags)[0] if job.tags else 'unknown'
+                            print(f"   - {tag}: {job.next_run}")
+                
                 # 1분 대기
                 import time
                 time.sleep(60)
@@ -834,6 +911,28 @@ class GlobalScheduler:
         """현재 서머타임 활성화 여부 확인"""
         us_time_info = self.market_time_manager.get_market_time_info(MTMarketRegion.US)
         return "서머타임" if us_time_info.is_dst_active else "표준시"
+    
+    def _refresh_kis_token(self):
+        """KIS API 토큰 재발급 (매일 자정 실행)"""
+        print("\n🔑 KIS API 토큰 재발급 시작 (00:00)")
+        print("="*50)
+        
+        try:
+            from app.services.kis_api import KISAPIClient
+            
+            kis_client = KISAPIClient()
+            success = kis_client.refresh_token_daily()
+            
+            if success:
+                print("✅ KIS 토큰 재발급 성공")
+                return True
+            else:
+                print("❌ KIS 토큰 재발급 실패")
+                return False
+                
+        except Exception as e:
+            print(f"❌ KIS 토큰 재발급 오류: {e}")
+            return False
 
 
 def main():

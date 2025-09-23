@@ -88,9 +88,15 @@ class GlobalMLEngine:
             # 임시 MockMarketCondition 클래스 생성 (테스트용)
             class MockMarketCondition:
                 def __init__(self):
-                    self.regime = "BULL"  # 기본값
+                    # MarketRegime Enum과 호환되는 객체 생성
+                    class MockRegime:
+                        def __init__(self, value):
+                            self.value = value
+                    
+                    self.regime = MockRegime("BULL_MARKET")  # MarketRegime 호환
                     self.volatility_level = 0.15
                     self.risk_level = "MEDIUM"
+                    self.trend_strength = 0.75
                     self.fear_greed_index = 65
             
             # 실제 구현에서는 여기서 시장 데이터를 분석
@@ -102,9 +108,14 @@ class GlobalMLEngine:
             # 실패 시에도 기본 객체 반환
             class DefaultMarketCondition:
                 def __init__(self):
-                    self.regime = "UNKNOWN"
+                    class DefaultRegime:
+                        def __init__(self, value):
+                            self.value = value
+                    
+                    self.regime = DefaultRegime("UNKNOWN")
                     self.volatility_level = 0.0
                     self.risk_level = "UNKNOWN"
+                    self.trend_strength = 0.5
                     self.fear_greed_index = 50
             
             return DefaultMarketCondition()
@@ -124,11 +135,6 @@ class GlobalMLEngine:
         except Exception as e:
             print(f"❌ 학습용 예측 결과 저장 실패: {e}")
 
-
-def main():
-    """메인 실행 함수"""
-    import argparse
-    
     def _get_market_index_data(self, db, region: MarketRegion, start_date: date, end_date: date) -> List[float]:
         """시장 지수 대표 데이터 추출"""
         try:
@@ -542,6 +548,143 @@ def main():
             return success
             
         except Exception as e:
+            print(f"❌ 모델 학습 중 오류: {e}")
+            import traceback
+            print(f"상세 오류: {traceback.format_exc()}")
+            return False
+    
+    def _prepare_training_data(self) -> bool:
+        """학습 데이터 준비 및 검증"""
+        print("🔍 학습 데이터 준비 중...")
+        
+        try:
+            with get_db_session() as db:
+                # 한국 시장 데이터 확인
+                kr_stocks = db.query(StockMaster).filter_by(
+                    market_region=MarketRegion.KR.value,
+                    is_active=True
+                ).count()
+                
+                # 미국 시장 데이터 확인
+                us_stocks = db.query(StockMaster).filter_by(
+                    market_region=MarketRegion.US.value,
+                    is_active=True
+                ).count()
+                
+                # 최근 데이터 확인
+                recent_date = datetime.now().date() - timedelta(days=7)
+                
+                kr_recent_data = db.query(StockDailyPrice).join(StockMaster).filter(
+                    StockMaster.market_region == MarketRegion.KR.value,
+                    StockDailyPrice.date >= recent_date
+                ).count()
+                
+                us_recent_data = db.query(StockDailyPrice).join(StockMaster).filter(
+                    StockMaster.market_region == MarketRegion.US.value,
+                    StockDailyPrice.date >= recent_date
+                ).count()
+                
+                print(f"   🇰🇷 한국 종목: {kr_stocks}개, 최근 데이터: {kr_recent_data}개")
+                print(f"   🇺🇸 미국 종목: {us_stocks}개, 최근 데이터: {us_recent_data}개")
+                
+                # 최소 데이터 요구사항 검증
+                if kr_stocks < 10 or us_stocks < 10:
+                    print("   ❌ 종목 데이터 부족")
+                    return False
+                
+                if kr_recent_data < 50 or us_recent_data < 50:
+                    print("   ❌ 최근 가격 데이터 부족")
+                    return False
+                
+                print("   ✅ 학습 데이터 준비 완료")
+                return True
+                
+        except Exception as e:
+            print(f"   ❌ 데이터 준비 실패: {e}")
+            return False
+            
+            if not training_success:
+                print("❌ 학습 데이터 준비 실패")
+                return False
+    
+    def _prepare_training_data(self) -> bool:
+        """학습 데이터 준비 및 검증"""
+        print("🔍 학습 데이터 준비 중...")
+        
+        try:
+            with get_db_session() as db:
+                # 한국 시장 데이터 확인
+                kr_stocks = db.query(StockMaster).filter_by(
+                    market_region=MarketRegion.KR.value,
+                    is_active=True
+                ).count()
+                
+                # 미국 시장 데이터 확인
+                us_stocks = db.query(StockMaster).filter_by(
+                    market_region=MarketRegion.US.value,
+                    is_active=True
+                ).count()
+                
+                # 최근 데이터 확인
+                recent_date = datetime.now().date() - timedelta(days=7)
+                
+                kr_recent_data = db.query(StockDailyPrice).join(StockMaster).filter(
+                    StockMaster.market_region == MarketRegion.KR.value,
+                    StockDailyPrice.date >= recent_date
+                ).count()
+                
+                us_recent_data = db.query(StockDailyPrice).join(StockMaster).filter(
+                    StockMaster.market_region == MarketRegion.US.value,
+                    StockDailyPrice.date >= recent_date
+                ).count()
+                
+                print(f"   🇰🇷 한국 종목: {kr_stocks}개, 최근 데이터: {kr_recent_data}개")
+                print(f"   🇺🇸 미국 종목: {us_stocks}개, 최근 데이터: {us_recent_data}개")
+                
+                # 최소 데이터 요구사항 검증
+                if kr_stocks < 10 or us_stocks < 10:
+                    print("   ❌ 종목 데이터 부족")
+                    return False
+                
+                if kr_recent_data < 50 or us_recent_data < 50:
+                    print("   ❌ 최근 가격 데이터 부족")
+                    return False
+                
+                print("   ✅ 학습 데이터 준비 완료")
+                return True
+                
+        except Exception as e:
+            print(f"   ❌ 데이터 준비 실패: {e}")
+            return False
+            
+            # 2. 한국 시장 모델 학습
+            print("🇰🇷 한국 시장 모델 학습...")
+            kr_success = self._train_market_model(MarketRegion.KR, model_config)
+            
+            # 3. 미국 시장 모델 학습
+            print("🇺🇸 미국 시장 모델 학습...")
+            us_success = self._train_market_model(MarketRegion.US, model_config)
+            
+            # 4. 글로벌 앙상블 모델 학습
+            print("🌍 글로벌 앙상블 모델 학습...")
+            ensemble_success = self._train_ensemble_model(model_config)
+            
+            success = kr_success and us_success and ensemble_success
+            
+            if success:
+                if is_production:
+                    print("🎉 배포 환경 고성능 학습 완료!")
+                else:
+                    print("✅ 개발 환경 학습 완료")
+                
+                # 모델 성능 검증
+                self._validate_trained_models()
+            else:
+                print("❌ 모델 학습 실패")
+            
+            return success
+            
+        except Exception as e:
             print(f"❌ 글로벌 모델 학습 실패: {e}")
             return False
     
@@ -583,9 +726,17 @@ def main():
         except Exception as e:
             print(f"❌ 모델 검증 실패: {e}")
     
-    def _train_market_model(self, region: MarketRegion) -> bool:
+    def _train_market_model(self, region: MarketRegion, model_config: dict = None) -> bool:
         """시장별 모델 학습"""
         print(f"🎯 {region.value} 시장 모델 학습...")
+        
+        if model_config is None:
+            model_config = {
+                'n_estimators': 100,
+                'max_depth': 10,
+                'random_state': 42,
+                'n_jobs': -1
+            }
         
         try:
             with get_db_session() as db:
@@ -597,6 +748,7 @@ def main():
                 
                 all_features = []
                 all_targets = []
+                sample_weights = []  # 가중치 추가
                 
                 for stock in stocks[:20]:  # 상위 20개 종목으로 제한
                     print(f"   📊 {stock.stock_code} 데이터 수집...")
@@ -623,8 +775,23 @@ def main():
                         # 최신 데이터 사용
                         latest_features = features.iloc[-1].fillna(0)
                         
+                        # 가중치 계산 (최신 데이터일수록 높은 가중치)
+                        time_weight = 1.0 / (days_back / 30.0 + 1.0)  # 시간 가중치
+                        
+                        # 변동성 가중치 (높은 변동성은 낮은 가중치)
+                        volatility = features['volatility_20d'].iloc[-1] if 'volatility_20d' in features.columns else 0.02
+                        volatility_weight = 1.0 / (volatility * 50 + 1.0)
+                        
+                        # 거래량 가중치 (높은 거래량은 높은 가중치)
+                        volume_ratio = features.get('volume_ratio', pd.Series([1.0])).iloc[-1]
+                        volume_weight = min(volume_ratio / 2.0 + 0.5, 2.0)
+                        
+                        # 최종 가중치
+                        final_weight = time_weight * volatility_weight * volume_weight
+                        
                         all_features.append(latest_features)
                         all_targets.append(target)
+                        sample_weights.append(final_weight)
                 
                 if len(all_features) < 50:
                     print(f"   ⚠️ {region.value}: 학습 데이터 부족 ({len(all_features)}개)")
@@ -633,6 +800,59 @@ def main():
                 # DataFrame 변환
                 X = pd.DataFrame(all_features)
                 y = np.array(all_targets)
+                weights = np.array(sample_weights)
+                
+                print(f"   📈 학습 데이터: {len(X)}개 샘플, {len(X.columns)}개 피처")
+                print(f"   ⚖️ 가중치 범위: {weights.min():.3f} - {weights.max():.3f}")
+                
+                # 피처 스케일링
+                scaler = RobustScaler()  # 아웃라이어에 강건한 스케일러
+                X_scaled = scaler.fit_transform(X)
+                
+                # 앙상블 모델 생성 (가중치 적용)
+                rf_model = RandomForestRegressor(**model_config)
+                gb_model = GradientBoostingRegressor(
+                    n_estimators=model_config.get('n_estimators', 100),
+                    max_depth=model_config.get('max_depth', 10),
+                    random_state=model_config.get('random_state', 42)
+                )
+                
+                ensemble_model = VotingRegressor([
+                    ('rf', rf_model),
+                    ('gb', gb_model)
+                ])
+                
+                # 가중치를 적용한 모델 학습
+                print(f"   🏋️ 가중치 적용 모델 학습 중...")
+                ensemble_model.fit(X_scaled, y, sample_weight=weights)
+                
+                # 모델 성능 평가
+                y_pred = ensemble_model.predict(X_scaled)
+                mse = mean_squared_error(y, y_pred, sample_weight=weights)
+                r2 = r2_score(y, y_pred, sample_weight=weights)
+                
+                print(f"   📊 성능 지표 - MSE: {mse:.4f}, R²: {r2:.4f}")
+                
+                # 피처 중요도 분석
+                if hasattr(ensemble_model.estimators_[0], 'feature_importances_'):
+                    feature_importance = ensemble_model.estimators_[0].feature_importances_
+                    top_features = pd.Series(feature_importance, index=X.columns).nlargest(10)
+                    print(f"   🎯 주요 피처:")
+                    for feature, importance in top_features.items():
+                        print(f"      {feature}: {importance:.3f}")
+                
+                # 모델 저장
+                self.models[region.value] = ensemble_model
+                self.scalers[region.value] = scaler
+                
+                model_path = self.model_dir / f"{region.value}_ensemble_model.pkl"
+                scaler_path = self.model_dir / f"{region.value}_scaler.pkl"
+                
+                joblib.dump(ensemble_model, model_path)
+                joblib.dump(scaler, scaler_path)
+                
+                print(f"   ✅ {region.value} 모델 학습 완료")
+                return True
                 
                 print(f"   📈 학습 데이터: {len(X)}개 샘플, {len(X.columns)}개 피처")
                 
