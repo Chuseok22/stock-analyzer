@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 from app.config.settings import settings
 from app.database.redis_client import redis_client
-from app.utils.api_utils import APIUtils, AlphaVantageAPIUtils
+from app.utils.api_utils import APIUtils, AlphaVantageAPIUtils, APIRateLimiter
 from app.utils.data_utils import DataValidationUtils, DateUtils
 
 logger = logging.getLogger(__name__)
@@ -28,11 +28,8 @@ class AlphaVantageAPIClient:
         self.api_key = settings.alpha_vantage_api_key
         self.base_url = "https://www.alphavantage.co/query"
         
-        # Rate limiting: 5 calls per minute for free tier
-        self.rate_limiter = APIUtils.APIRateLimiter(
-            calls_per_minute=5,
-            redis_key_prefix="alpha_vantage"
-        )
+        # Rate limiting: 5 calls per minute for free tier = 5/60 calls per second
+        self.rate_limiter = APIRateLimiter(calls_per_second=5.0/60.0)
         
         if not self.api_key:
             logger.warning("Alpha Vantage API key not provided")
