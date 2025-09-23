@@ -65,8 +65,11 @@ class GlobalScheduler:
         signal.signal(signal.SIGTERM, signal_handler)
     
     def _setup_dynamic_schedules(self):
-        """동적 스케줄 설정 (MarketTimeManager 활용)"""
+        """동적 스케줄 설정 (MarketTimeManager 활용) - 중복 방지"""
         print("⏰ 동적 글로벌 스케줄 설정 중...")
+        
+        # 기존 스케줄 모두 제거 (중복 방지)
+        schedule.clear()
         
         # MarketTimeManager로 현재 시장 시간 정보 가져오기
         us_time_info = self.market_time_manager.get_market_time_info(MTMarketRegion.US)
@@ -89,13 +92,13 @@ class GlobalScheduler:
         market_analysis_time = f"{analysis_hour:02d}:{analysis_minute:02d}"
         
         # 1. 한국 시장 관련 스케줄
-        schedule.every().day.at("08:30").do(self._run_korean_premarket_recommendations).tag("kr_premarket")  # 한국 장 시작 30분 전
-        schedule.every().day.at("16:00").do(self._run_korean_market_analysis).tag("kr_market")  # 한국 장 마감 후 분석
+        schedule.every().day.at("08:30").do(lambda: asyncio.run(self._run_korean_premarket_recommendations())).tag("kr_premarket")  # 한국 장 시작 30분 전
+        schedule.every().day.at("16:00").do(lambda: asyncio.run(self._run_korean_market_analysis())).tag("kr_market")  # 한국 장 마감 후 분석
         
         # 2. 미국 시장 관련 스케줄 (동적)
-        schedule.every().day.at(premarket_start_kr).do(self._run_us_premarket_alert).tag("us_premarket")
-        schedule.every().day.at(regular_start_kr).do(self._run_us_market_open_alert).tag("us_market_open")
-        schedule.every().day.at(market_analysis_time).do(self._run_us_market_analysis).tag("us_market")
+        schedule.every().day.at(premarket_start_kr).do(lambda: asyncio.run(self._run_us_premarket_alert())).tag("us_premarket")
+        schedule.every().day.at(regular_start_kr).do(lambda: asyncio.run(self._run_us_market_open_alert())).tag("us_market_open")
+        schedule.every().day.at(market_analysis_time).do(lambda: asyncio.run(self._run_us_market_analysis())).tag("us_market")
         
         # 3. 데이터 수집 스케줄
         schedule.every().day.at(aftermarket_end_kr).do(self._collect_us_data).tag("us_data")
@@ -108,11 +111,11 @@ class GlobalScheduler:
         # 5. KIS API 토큰 재발급 (매일 자정)
         schedule.every().day.at("00:00").do(self._refresh_kis_token).tag("kis_token")
         
-        # 6. 시스템 헬스체크
+        # 6. 시스템 헬스체크 (1시간마다, 중복 방지)
         schedule.every().hour.at(":00").do(self._health_check).tag("health")
         
-        # 7. 긴급 알림 체크
-        schedule.every(4).hours.do(self._check_emergency_alerts).tag("emergency")
+        # 7. 긴급 알림 체크 (4시간마다, 중복 방지)
+        schedule.every(4).hours.do(lambda: asyncio.run(self._check_emergency_alerts())).tag("emergency")
         
         print("✅ 동적 스케줄 설정 완료:")
         print(f"   🇰🇷 한국 프리마켓 추천: 매일 08:30")
@@ -283,18 +286,28 @@ class GlobalScheduler:
 **📅 오늘 예정된 작업 ({current_date}):**
 {today_schedule}
 
-**⏰ 정기 스케줄:**
-• 🇰🇷 한국 시장 분석: 매일 16:00
-• 🇺🇸 미국 프리마켓: 매일 17:00 (ET 04:00)
-• 🇺🇸 미국 정규장: 매일 22:30 (ET 09:30)
-• 🇺🇸 미국 시장 분석: 매일 05:30 (ET 16:30)
+**⏰ 정기 스케줄 요약:**
+• 🇰🇷 **한국 시장:**
+  - 프리마켓 추천: 매일 08:30 (장 시작 30분 전)
+  - 시장 분석: 매일 16:00 (장 마감 후)
+  - 데이터 수집: 매일 17:00
 
-**🤖 ML 학습:**
-• 주간 재학습: 매주 토요일 02:00
+• 🇺🇸 **미국 시장:**
+  - 프리마켓 알림: 매일 17:00 (ET 04:00)
+  - 정규장 시작: 매일 22:30 (ET 09:30)  
+  - 시장 분석: 매일 05:30 (ET 16:30)
+  - 데이터 수집: 매일 09:00 (ET 20:30)
+
+**🤖 ML 학습 & 시스템:**
+• 주간 모델 재학습: 매주 토요일 02:00
+• 월간 고도화 학습: 매월 1일 03:00
+• KIS 토큰 재발급: 매일 00:00
+• 헬스체크: 매시 정각
 • 긴급 알림 체크: 4시간마다
 
 **시작 시간:** {current_time.strftime('%Y-%m-%d %H:%M:%S')}
-**서버 상태:** 정상 운영 중
+**서버 상태:** 정상 운영 중 ✅
+**다음 작업:** 가장 가까운 스케줄에 따라 자동 실행
             """.strip()
             
             # 간단한 알림 전송 (SmartAlert 대신 직접 알림 서비스 사용)
@@ -339,16 +352,18 @@ class GlobalScheduler:
             print(f"   상세 오류: {traceback.format_exc()}")
     
     def _get_today_schedule(self):
-        """오늘 예정된 스케줄 가져오기"""
+        """오늘 예정된 스케줄 가져오기 (중복 제거)"""
         try:
             current_time = datetime.now(self.kr_timezone)
             today_jobs = []
+            seen_schedules = set()  # 중복 제거를 위한 집합
             
             for job in schedule.jobs:
                 next_run = job.next_run
                 if next_run and next_run.date() == current_time.date():
-                    # 작업 이름 매핑
+                    # 작업 이름 매핑 (모든 태그 포함)
                     tag_names = {
+                        'kr_premarket': '🇰🇷 한국 프리마켓 추천',
                         'kr_market': '🇰🇷 한국 시장 분석',
                         'us_premarket': '🇺🇸 미국 프리마켓 알림',
                         'us_market_open': '🇺🇸 미국 정규장 시작',
@@ -356,6 +371,8 @@ class GlobalScheduler:
                         'kr_data': '📊 한국 데이터 수집',
                         'us_data': '📊 미국 데이터 수집',
                         'ml_training': '🤖 ML 주간 학습',
+                        'ml_monthly': '🤖 ML 월간 학습',
+                        'kis_token': '🔑 KIS 토큰 재발급',
                         'health': '🏥 헬스체크',
                         'emergency': '🚨 긴급 알림 체크'
                     }
@@ -363,20 +380,37 @@ class GlobalScheduler:
                     tag = list(job.tags)[0] if job.tags else 'unknown'
                     task_name = tag_names.get(tag, f'🔧 {tag}')
                     
-                    time_until = next_run - current_time.replace(tzinfo=None)
-                    hours_until = max(0, int(time_until.total_seconds() / 3600))
+                    # 중복 체크: (시간, 작업명) 조합으로 중복 제거
+                    schedule_key = (next_run.strftime('%H:%M'), task_name)
+                    if schedule_key in seen_schedules:
+                        continue
+                    seen_schedules.add(schedule_key)
                     
-                    if hours_until == 0:
-                        time_desc = "곧 실행"
-                    elif hours_until < 24:
+                    time_until = next_run - current_time.replace(tzinfo=None)
+                    total_seconds = time_until.total_seconds()
+                    
+                    if total_seconds < 0:
+                        time_desc = "실행 완료"
+                    elif total_seconds < 3600:  # 1시간 미만
+                        minutes_until = max(1, int(total_seconds / 60))
+                        time_desc = f"{minutes_until}분 후"
+                    elif total_seconds < 86400:  # 24시간 미만
+                        hours_until = int(total_seconds / 3600)
                         time_desc = f"{hours_until}시간 후"
                     else:
-                        time_desc = f"{hours_until//24}일 후"
+                        days_until = int(total_seconds / 86400)
+                        time_desc = f"{days_until}일 후"
                     
-                    today_jobs.append(f"• {task_name}: {next_run.strftime('%H:%M')} ({time_desc})")
+                    today_jobs.append({
+                        'time': next_run.strftime('%H:%M'),
+                        'desc': f"• {task_name}: {next_run.strftime('%H:%M')} ({time_desc})",
+                        'sort_time': next_run.hour * 60 + next_run.minute
+                    })
             
             if today_jobs:
-                return "\n".join(sorted(today_jobs))
+                # 시간순으로 정렬
+                today_jobs.sort(key=lambda x: x['sort_time'])
+                return "\n".join([job['desc'] for job in today_jobs])
             else:
                 return "• 오늘은 예정된 작업이 없습니다"
                 
