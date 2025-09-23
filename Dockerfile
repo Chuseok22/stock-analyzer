@@ -83,6 +83,7 @@ RUN find ./scripts -name "*.py" -exec chmod +x {} \; && \
 # 필요한 디렉토리 생성
 RUN mkdir -p /app/data \
              /app/logs \
+             /app/models \
              /app/storage/logs \
              /app/storage/models \
              /app/storage/reports \
@@ -91,15 +92,17 @@ RUN mkdir -p /app/data \
              /app/storage/analysis_reports \
              /app/temp
 
-# 디렉토리 소유권 및 권한 설정
+# 디렉토리 소유권 및 권한 설정 (볼륨 마운트될 디렉토리 포함)
 RUN chown -R appuser:appgroup /app && \
     chmod -R 755 /app && \
     chmod -R 777 /app/logs && \
+    chmod -R 777 /app/data && \
+    chmod -R 777 /app/models && \
     chmod -R 777 /app/storage && \
     chmod -R 777 /app/temp
 
 # 볼륨 마운트 포인트 설정 (외부 데이터 연동)
-VOLUME ["/app/data", "/app/logs"]
+VOLUME ["/app/data", "/app/logs", "/app/models"]
 
 # 사용자 전환 (보안 강화)
 USER appuser
