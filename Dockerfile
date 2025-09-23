@@ -1,5 +1,5 @@
 # Multi-stage build for production optimization
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 # 빌드 인수 설정 (GitHub Actions에서 전달)
 ARG GIT_SHA
@@ -35,7 +35,7 @@ RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # === Production Stage ===
-FROM python:3.11-slim as production
+FROM python:3.11-slim AS production
 
 # 빌드 인수를 환경 변수로 전달
 ARG GIT_SHA
@@ -74,7 +74,7 @@ COPY scripts/ ./scripts/
 COPY database/ ./database/
 
 # 실행 스크립트 복사
-COPY run_global_system.py .
+COPY tools/system/run_global_system.py ./run_global_system.py
 
 # 실행 권한 부여
 RUN find ./scripts -name "*.py" -exec chmod +x {} \; && \
