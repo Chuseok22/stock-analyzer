@@ -26,7 +26,6 @@ sys.path.insert(0, str(project_root / "app"))
 from app.ml.global_ml_engine import GlobalMLEngine, MarketRegion
 from app.services.smart_alert_system import SmartAlertSystem
 from app.utils.market_time_utils import MarketTimeManager, MarketRegion as MTMarketRegion
-from app.services.performance_optimizer import performance_optimizer
 from app.config.settings import settings
 
 
@@ -126,9 +125,6 @@ class GlobalScheduler:
         
         # 7. 긴급 알림 체크 (4시간마다, 중복 방지)
         schedule.every(4).hours.do(lambda: asyncio.run(self._check_emergency_alerts())).tag("emergency")
-        
-        # 8. 성능 최적화 및 모니터링 (매시간)
-        schedule.every().hour.at(":30").do(self._optimize_performance).tag("performance")
         
         print("✅ 동적 스케줄 설정 완료:")
         print(f"   🇰🇷 한국 프리마켓 추천: 매일 08:30")
@@ -1251,36 +1247,6 @@ class GlobalScheduler:
                 
         except Exception as e:
             print(f"❌ KIS 토큰 재발급 오류: {e}")
-            return False
-    
-    def _optimize_performance(self):
-        """시스템 성능 최적화 (매시간 실행)"""
-        print("\n⚡ 시스템 성능 최적화 시작")
-        print("="*50)
-        
-        try:
-            # 메모리 최적화
-            performance_optimizer.optimize_memory_usage()
-            
-            # 성능 리포트 생성
-            report = performance_optimizer.get_performance_report()
-            
-            print("📊 성능 현황:")
-            print(f"   메모리 사용량: {report['memory_usage']}")
-            print(f"   캐시 히트율: {report.get('cache_stats', {}).get('hit_rate', 'N/A')}")
-            print(f"   DB 쿼리 수: {report['db_queries']}")
-            print(f"   API 호출 수: {report['api_calls']}")
-            
-            # 성능 경고 체크
-            memory_mb = float(report['memory_usage'].replace('MB', ''))
-            if memory_mb > 1000:  # 1GB 초과시 경고
-                print("⚠️ 메모리 사용량 높음 - 추가 최적화 필요")
-            
-            print("✅ 성능 최적화 완료")
-            return True
-            
-        except Exception as e:
-            print(f"❌ 성능 최적화 실패: {e}")
             return False
 
 
