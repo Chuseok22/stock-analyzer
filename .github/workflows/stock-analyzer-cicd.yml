@@ -75,9 +75,7 @@ jobs:
             PORT=8090
             CONTAINER_NAME="${PROJECT}"
             WORKDIR="/opt/${PROJECT}/${BRANCH}"
-            DATA_DIR="/volume1/project/stock-analyzer/data"
-            LOG_DIR="/volume1/project/stock-analyzer/logs"
-            MODEL_DIR="/volume1/project/stock-analyzer/models"
+            STORAGE_DIR="/volume1/project/stock-analyzer"
 
             echo "브랜치: ${BRANCH}"
             echo "이미지:  ${IMAGE}"
@@ -105,13 +103,11 @@ jobs:
 
             echo "=== 디렉터리 구조 준비 ==="
             echo $PW | sudo -S mkdir -p "${WORKDIR}"
-            echo $PW | sudo -S mkdir -p "${DATA_DIR}"
-            echo $PW | sudo -S mkdir -p "${LOG_DIR}"
-            echo $PW | sudo -S mkdir -p "${MODEL_DIR}"
+            echo $PW | sudo -S mkdir -p "${STORAGE_DIR}"
             
             # 볼륨 디렉토리 권한 설정 (컨테이너 사용자가 접근 가능하도록)
-            echo $PW | sudo -S chown -R 1000:1000 "${DATA_DIR}" "${LOG_DIR}" "${MODEL_DIR}"
-            echo $PW | sudo -S chmod -R 777 "${DATA_DIR}" "${LOG_DIR}" "${MODEL_DIR}"
+            echo $PW | sudo -S chown -R 1000:1000 "${STORAGE_DIR}"
+            echo $PW | sudo -S chmod -R 777 "${STORAGE_DIR}"
 
             echo "=== 환경 파일 구성 ==="
             # GitHub Secret에서 .env 파일 내용을 가져와서 생성
@@ -124,9 +120,7 @@ jobs:
               -e TZ=Asia/Seoul \
               -e PORT=8080 \
               --env-file "${WORKDIR}/.env" \
-              -v ${DATA_DIR}:/app/data \
-              -v ${LOG_DIR}:/app/logs \
-              -v ${MODEL_DIR}:/app/models \
+              -v ${STORAGE_DIR}:/app/storage \
               -v /etc/localtime:/etc/localtime:ro \
               --restart unless-stopped \
               "${IMAGE}"
@@ -145,6 +139,4 @@ jobs:
             echo "=== 배포 완료 ==="
             echo "Stock Analyzer가 포트 ${PORT}에서 실행 중입니다."
             echo "Health Check: http://SERVER_IP:${PORT}/health"
-            echo "데이터 디렉터리: ${DATA_DIR}"
-            echo "로그 디렉터리: ${LOG_DIR}"
-            echo "모델 디렉터리: ${MODEL_DIR}"
+            echo "스토리지 디렉터리: ${STORAGE_DIR}"
