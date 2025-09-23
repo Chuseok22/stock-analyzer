@@ -25,9 +25,9 @@ except ImportError:
 try:
     import aioredis
     AIOREDIS_AVAILABLE = True
-except (ImportError, Exception) as e:
+except ImportError:
     AIOREDIS_AVAILABLE = False
-    print(f"⚠️ aioredis 호환성 문제 - 기본 redis 클라이언트 사용: {e}")
+    print("⚠️ aioredis 미설치 - 기본 redis 클라이언트 사용")
 import functools
 import time
 import gc
