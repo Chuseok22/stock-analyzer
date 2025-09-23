@@ -104,9 +104,12 @@ class GlobalScheduler:
         schedule.every().day.at(aftermarket_end_kr).do(self._collect_us_data).tag("us_data")
         schedule.every().day.at("17:00").do(self._collect_korean_data).tag("kr_data")
         
-        # 4. ML 모델 재학습 스케줄
-        schedule.every().saturday.at("02:00").do(self._run_weekly_ml_training).tag("ml_training")
-        schedule.every(30).days.at("03:00").do(self._run_monthly_ml_training).tag("ml_monthly")  # 매 30일
+        # 4. 최적화된 ML 모델 학습 스케줄
+        # 일일 ML 학습 (매일 06:30 - 시장 활동 없는 최적 시간)
+        schedule.every().day.at("06:30").do(lambda: asyncio.run(self._run_daily_ml_training())).tag("ml_daily")
+        
+        # 주간 고도화 학습 (일요일 02:00 - 주말 활용)
+        schedule.every().sunday.at("02:00").do(lambda: asyncio.run(self._run_weekly_advanced_training())).tag("ml_weekly_advanced")
         
         # 5. KIS API 토큰 재발급 (매일 자정)
         schedule.every().day.at("00:00").do(self._refresh_kis_token).tag("kis_token")
@@ -124,7 +127,8 @@ class GlobalScheduler:
         print(f"   🇺🇸 미국 정규장 시작: 매일 {regular_start_kr} (ET 09:30)")
         print(f"   📊 미국 시장 분석: 매일 {market_analysis_time} (ET 16:30)")
         print(f"   📁 미국 데이터 수집: 매일 {aftermarket_end_kr} (ET 20:30)")
-        print(f"   🤖 ML 재학습: 매주 토요일 02:00")
+        print(f"   🤖 일일 ML 학습: 매일 06:30 (최적화)")
+        print(f"   🧠 주간 고도화 학습: 매주 일요일 02:00")
         print(f"   � KIS 토큰 재발급: 매일 00:00")
         print(f"   �🚨 긴급 알림: 4시간마다")
         print(f"   ⏰ {dst_status}")
@@ -299,8 +303,8 @@ class GlobalScheduler:
   - 데이터 수집: 매일 09:00 (ET 20:30)
 
 **🤖 ML 학습 & 시스템:**
-• 주간 모델 재학습: 매주 토요일 02:00
-• 월간 고도화 학습: 매월 1일 03:00
+• 일일 ML 적응 학습: 매일 06:30 (최적화)
+• 주간 고도화 학습: 매주 일요일 02:00
 • KIS 토큰 재발급: 매일 00:00
 • 헬스체크: 매시 정각
 • 긴급 알림 체크: 4시간마다
@@ -370,8 +374,8 @@ class GlobalScheduler:
                         'us_market': '🇺🇸 미국 시장 분석',
                         'kr_data': '📊 한국 데이터 수집',
                         'us_data': '📊 미국 데이터 수집',
-                        'ml_training': '🤖 ML 주간 학습',
-                        'ml_monthly': '🤖 ML 월간 학습',
+                        'ml_daily': '🤖 일일 ML 학습',
+                        'ml_weekly_advanced': '� 주간 고도화 학습',
                         'kis_token': '🔑 KIS 토큰 재발급',
                         'health': '🏥 헬스체크',
                         'emergency': '🚨 긴급 알림 체크'
@@ -606,48 +610,133 @@ class GlobalScheduler:
             print(f"❌ 미국 데이터 수집 오류: {e}")
             return False
     
-    def _run_weekly_ml_training(self):
-        """주간 ML 모델 재학습"""
-        print("\n🏋️ 주간 ML 모델 재학습 시작")
+    async def _run_daily_ml_training(self):
+        """일일 ML 적응 학습 (06:30 - 시장 활동 없는 최적 시간)"""
+        print("\n🤖 일일 ML 적응 학습 시작 (06:30)")
         print("="*50)
         
         try:
-            # 글로벌 모델 재학습
-            success = self.ml_engine.train_global_models()
+            print("⏰ 최적 학습 시간: 미국 장 종료 후 + 한국 장 시작 2시간 전")
+            print("📊 학습 방식: 증분 학습 (전일 데이터 + 최근 30일)")
+            
+            # 빠른 적응 학습 (15-20분 소요)
+            success = self.ml_engine.train_global_models(use_intensive_config=False)
             
             if success:
-                self.last_ml_training = datetime.now()
-                print("✅ 주간 ML 재학습 완료")
+                print("✅ 일일 ML 적응 학습 완료 (시장 변화 반영)")
+                
+                # 간단한 성공 알림 (선택적)
+                await self._send_daily_training_notification(success=True)
             else:
-                print("❌ 주간 ML 재학습 실패")
+                print("❌ 일일 ML 적응 학습 실패")
+                await self._send_daily_training_notification(success=False)
             
             return success
             
         except Exception as e:
-            print(f"❌ 주간 ML 재학습 오류: {e}")
+            print(f"❌ 일일 ML 적응 학습 오류: {e}")
+            await self._send_daily_training_notification(success=False, error=str(e))
+            return False
+    
+    async def _run_weekly_advanced_training(self):
+        """주간 고도화 학습 (일요일 02:00 - 주말 활용)"""
+        print("\n🧠 주간 고도화 학습 시작 (일요일 02:00)")
+        print("="*50)
+        
+        try:
+            print("⏰ 주말 시간 활용: 모든 시장 닫힘, 시스템 독점 사용")
+            print("📊 학습 방식: 하이퍼파라미터 최적화 + 최근 1년 데이터")
+            print("⏱️ 예상 소요 시간: 2-3시간")
+            
+            # 집중 고도화 학습 (2-3시간 소요)
+            success = self.ml_engine.train_global_models(use_intensive_config=True)
+            
+            if success:
+                print("✅ 주간 고도화 학습 완료 (최고 성능 모델)")
+                
+                # 주간 학습 성과 알림
+                await self._send_weekly_training_notification(success=True)
+            else:
+                print("❌ 주간 고도화 학습 실패")
+                await self._send_weekly_training_notification(success=False)
+            
+            return success
+            
+        except Exception as e:
+            print(f"❌ 주간 고도화 학습 오류: {e}")
+            await self._send_weekly_training_notification(success=False, error=str(e))
+            return False
+    
+    async def _send_daily_training_notification(self, success: bool, error: str = None):
+        """일일 학습 결과 알림 (간단)"""
+        try:
+            if success:
+                message = "🤖 일일 ML 적응 학습 완료\n✅ 최신 시장 데이터 반영"
+            else:
+                message = f"❌ 일일 ML 학습 실패\n{error if error else '알 수 없는 오류'}"
+            
+            # 관리자에게만 간단한 알림 (선택적)
+            # await self.alert_system.send_admin_alert(message)
+            print(f"📱 알림: {message}")
+            
+        except Exception as e:
+            print(f"⚠️ 일일 학습 알림 전송 실패: {e}")
+    
+    async def _send_weekly_training_notification(self, success: bool, error: str = None):
+        """주간 고도화 학습 결과 알림 (상세)"""
+        try:
+            if success:
+                message = """🧠 주간 고도화 학습 완료! 
+
+✅ 성과:
+• 하이퍼파라미터 최적화 완료
+• 최근 1년 데이터 학습
+• 최고 성능 모델 업데이트
+
+⏰ 다음 학습: 다음 주 일요일 02:00
+🎯 학습 빈도: 주 7회 일일학습 + 주 1회 고도화"""
+            else:
+                message = f"""❌ 주간 고도화 학습 실패
+
+🚨 오류 내용:
+{error if error else '알 수 없는 오류'}
+
+🔧 대응 필요:
+• 로그 확인 및 원인 분석
+• 시스템 리소스 점검"""
+            
+            # 전체 알림 시스템으로 전송
+            await self.alert_system.send_alert(
+                title="주간 ML 고도화 학습 결과",
+                message=message,
+                alert_type="admin" if not success else "info"
+            )
+            
+        except Exception as e:
+            print(f"⚠️ 주간 학습 알림 전송 실패: {e}")
+    
+    def _run_weekly_ml_training(self):
+        """레거시 주간 ML 모델 재학습 (호환성 유지)"""
+        print("\n🏋️ 레거시 주간 ML 모델 재학습")
+        print("⚠️ 새로운 일일/주간 학습 시스템으로 교체됨")
+        
+        try:
+            success = self.ml_engine.train_global_models()
+            return success
+        except Exception as e:
+            print(f"❌ 레거시 ML 재학습 오류: {e}")
             return False
     
     def _run_monthly_ml_training(self):
-        """월간 딥러닝 모델 재학습"""
-        print("\n🧠 월간 딥러닝 모델 재학습 시작")
-        print("="*50)
+        """레거시 월간 딥러닝 모델 재학습 (호환성 유지)"""
+        print("\n🧠 레거시 월간 딥러닝 모델 재학습")
+        print("⚠️ 새로운 주간 고도화 학습으로 교체됨")
         
         try:
-            # 더 깊은 학습 (더 많은 데이터, 더 복잡한 모델)
-            # 향후 딥러닝 모델 확장 시 여기에 구현
-            
-            # 현재는 일반 모델 재학습
             success = self.ml_engine.train_global_models()
-            
-            if success:
-                print("✅ 월간 딥러닝 재학습 완료") 
-            else:
-                print("❌ 월간 딥러닝 재학습 실패")
-            
             return success
-            
         except Exception as e:
-            print(f"❌ 월간 딥러닝 재학습 오류: {e}")
+            print(f"❌ 레거시 딥러닝 재학습 오류: {e}")
             return False
     
     async def _check_emergency_alerts(self):

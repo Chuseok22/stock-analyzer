@@ -80,8 +80,10 @@ def test_schedule_functions():
             '_run_us_market_analysis',
             '_collect_korean_data',
             '_collect_us_data',
-            '_run_weekly_ml_training',
-            '_run_monthly_ml_training',
+            '_run_daily_ml_training',
+            '_run_weekly_advanced_training',
+            '_run_weekly_ml_training',  # 레거시 호환성
+            '_run_monthly_ml_training',  # 레거시 호환성
             '_refresh_kis_token',
             '_health_check',
             '_check_emergency_alerts'

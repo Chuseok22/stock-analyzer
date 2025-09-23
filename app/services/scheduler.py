@@ -65,15 +65,27 @@ class SchedulingService:
           misfire_grace_time=900  # 15분 grace time
       )
 
-      # Weekly model retraining (토요일 오전 2시)
+      # Daily ML adaptive training (매일 오전 6시 30분)
       self.scheduler.add_job(
-          func=self.weekly_retrain_task,
+          func=self.daily_ml_training_task,
           trigger=CronTrigger(
-              day_of_week='sat',  # 토요일
+              hour=6,  # 오전 6시
+              minute=30  # 30분
+          ),
+          id='daily_ml_training',
+          replace_existing=True,
+          misfire_grace_time=900  # 15분 grace time
+      )
+
+      # Weekly advanced training (일요일 오전 2시)
+      self.scheduler.add_job(
+          func=self.weekly_advanced_training_task,
+          trigger=CronTrigger(
+              day_of_week='sun',  # 일요일
               hour=2,  # 오전 2시
               minute=0
           ),
-          id='weekly_retrain',
+          id='weekly_advanced_training',
           replace_existing=True,
           misfire_grace_time=3600  # 1시간 grace time
       )
@@ -252,6 +264,67 @@ class SchedulingService:
 
     except Exception as e:
       logger.error(f"Weekly retrain task failed: {e}")
+
+  def daily_ml_training_task(self):
+    """Daily task: adaptive ML training."""
+    logger.info("Starting daily ML adaptive training task")
+
+    try:
+      # Quick adaptive training with recent data
+      result = self.recommendation_service.train_model(
+          universe_id=self.universe_id,
+          retrain=True,
+          quick_mode=True  # Fast adaptive learning
+      )
+
+      if result.get('success', False):
+        logger.info("Daily ML adaptive training completed successfully")
+
+        # Send brief notification about daily training
+        if settings.send_admin_notifications:
+          message = f"🤖 일일 ML 적응 학습 완료\n"
+          message += f"처리 시간: {result.get('duration', 'Unknown')}\n"
+          message += f"업데이트된 모델: {result.get('updated_models', 0)}개"
+
+          self.notification_service._send_simple_slack_message(message)
+
+      else:
+        logger.error(f"Daily ML training failed: {result.get('error', 'Unknown error')}")
+
+    except Exception as e:
+      logger.error(f"Daily ML training task failed: {e}")
+
+  def weekly_advanced_training_task(self):
+    """Weekly task: advanced ML training with hyperparameter optimization."""
+    logger.info("Starting weekly advanced ML training task")
+
+    try:
+      # Intensive training with hyperparameter optimization
+      result = self.recommendation_service.train_model(
+          universe_id=self.universe_id,
+          retrain=True,
+          intensive_mode=True,  # Advanced hyperparameter optimization
+          use_extended_data=True  # Use more historical data
+      )
+
+      if result.get('success', False):
+        logger.info("Weekly advanced ML training completed successfully")
+
+        # Send detailed notification about advanced training
+        if settings.send_admin_notifications:
+          message = f"🧠 주간 고도화 학습 완료\n"
+          message += f"최적 모델: {result.get('best_model', 'Unknown')}\n"
+          message += f"학습 샘플 수: {result.get('training_samples', 0)}\n"
+          message += f"최적화된 파라미터: {result.get('optimized_params', 'Unknown')}\n"
+          message += f"성능 개선: {result.get('performance_improvement', 'Unknown')}%"
+
+          self.notification_service._send_simple_slack_message(message)
+
+      else:
+        logger.error(f"Weekly advanced training failed: {result.get('error', 'Unknown error')}")
+
+    except Exception as e:
+      logger.error(f"Weekly advanced training task failed: {e}")
 
   def monthly_universe_update_task(self):
     """Monthly task: update stock universe."""
@@ -476,8 +549,11 @@ class SimpleScheduler:
     schedule.every().thursday.at("08:30").do(self._safe_run, self.morning_task)
     schedule.every().friday.at("08:30").do(self._safe_run, self.morning_task)
 
+    # Daily ML adaptive training (every day 6:30 AM)
+    schedule.every().day.at("06:30").do(self._safe_run, self.daily_ml_training_task)
+
     # Weekly tasks
-    schedule.every().saturday.at("02:00").do(self._safe_run, self.weekly_retrain_task)
+    schedule.every().sunday.at("02:00").do(self._safe_run, self.weekly_advanced_training_task)
     schedule.every().sunday.at("18:00").do(self._safe_run, self.weekly_report_task)
 
     logger.info("Simple schedules configured")
@@ -499,9 +575,19 @@ class SimpleScheduler:
     logger.info("Running morning task")
     # Implementation similar to SchedulingService.morning_notification_task
 
+  def daily_ml_training_task(self):
+    """Daily ML adaptive training."""
+    logger.info("Running daily ML adaptive training task")
+    # Implementation similar to SchedulingService.daily_ml_training_task
+
+  def weekly_advanced_training_task(self):
+    """Weekly advanced ML training."""
+    logger.info("Running weekly advanced ML training task")
+    # Implementation similar to SchedulingService.weekly_advanced_training_task
+
   def weekly_retrain_task(self):
-    """Weekly model retraining."""
-    logger.info("Running weekly retrain task")
+    """Weekly model retraining (legacy)."""
+    logger.info("Running legacy weekly retrain task")
     # Implementation similar to SchedulingService.weekly_retrain_task
 
   def weekly_report_task(self):
