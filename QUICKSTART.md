@@ -53,7 +53,7 @@ stock-analyzer/
 | 스크립트 | 기능 | 실행 주기 |
 |---------|------|----------|
 | `production_ml_system.py` | ML 분석 및 예측 | 수동/자동 |
-| `daily_trading_system.py` | 자동화 스케줄러 | 평일 16:00, 토요일 09:00 |
+| `daily_trading_system.py` | 자동화 스케줄러 | 평일 16:00, 일일 ML 06:30 |
 | `backtesting_system.py` | 과거 성과 분석 | 수동 |
 | `collect_enhanced_data.py` | 데이터 수집 | 자동화에 포함 |
 

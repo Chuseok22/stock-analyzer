@@ -35,9 +35,11 @@
 06:30 - �� 정규장 마감 후 데이터 수집 및 ML 분석
 ```
 
-#### 📊 주간 분석
+#### 📊 일일 & 주간 분석
 ```
-토요일 12:00 - 🏋️ 주간 종합 분석, ML 재학습, 트렌드 리포트
+매일 06:30 - 🤖 일일 ML 적응 학습 (전일 데이터 반영)
+일요일 02:00 - 🧠 주간 고도화 학습 (하이퍼파라미터 최적화)
+일요일 18:00 - 📊 주간 성과 리포트 및 트렌드 분석
 ```
 
 ## 🚀 배포 단계
@@ -163,8 +165,12 @@ crontab -e
 # 한국 데이터 수집 (매일 17:00)
 0 17 * * * cd /opt/stock-analyzer && python scripts/global_scheduler.py --manual korean_data
 
-# ML 모델 재학습 (매주 토요일 02:00)
-0 2 * * 6 cd /opt/stock-analyzer && python scripts/global_scheduler.py --manual ml_training
+# ML 모델 학습 최적화 스케줄
+# 일일 ML 적응 학습 (매일 06:30)
+30 6 * * * cd /opt/stock-analyzer && python scripts/global_scheduler.py --manual daily_ml_training
+
+# 주간 고도화 학습 (매주 일요일 02:00)
+0 2 * * 0 cd /opt/stock-analyzer && python scripts/global_scheduler.py --manual weekly_advanced_training
 ```
 
 ## 🔧 운영 관리

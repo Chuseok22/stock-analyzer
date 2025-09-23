@@ -44,7 +44,7 @@ cleanup_project.sh
 .vscode/settings.json
 .vscode/launch.json
 .DS_Store
-Thumbs.db
+*.iml
 
 # ======================================
 # Python 관련 파일들

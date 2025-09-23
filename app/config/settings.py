@@ -110,8 +110,8 @@ class Settings(BaseSettings):
 
   @property
   def database_url(self) -> str:
-    """Generate database URL for SQLAlchemy using psycopg2."""
-    return f"postgresql+psycopg2://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
+    """Generate database URL for SQLAlchemy using psycopg3."""
+    return f"postgresql+psycopg://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
 
   @property
   def redis_url(self) -> str:
