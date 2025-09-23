@@ -143,7 +143,7 @@ class GlobalScheduler:
         print(f"   ⏰ {dst_status}")
     
     def _ensure_models_exist(self):
-        """모델 존재 여부 확인 및 필요시 생성"""
+        """모델 존재 여부 확인 및 필요시 학습"""
         print("🔍 ML 모델 존재 여부 확인 중...")
         
         try:
@@ -166,44 +166,29 @@ class GlobalScheduler:
             
             if missing_models:
                 print(f"   ⚠️ 누락된 모델: {', '.join(missing_models)}")
-                print("   🏭 더미 모델 생성 중...")
+                print("   🚀 실제 모델 학습 시작...")
                 
-                # 더미 모델 즉시 생성
-                self._create_dummy_models()
+                # 실제 모델 학습 수행
+                success = self._bootstrap_ml_models()
                 
-                print("   ✅ 더미 모델 생성 완료 - 서비스 즉시 시작 가능")
-                print("   🚀 백그라운드에서 실제 모델 학습 예약...")
-                
-                # 실제 모델 학습은 5분 후 백그라운드에서 실행
-                import schedule
-                schedule.every(5).minutes.do(self._background_model_training).tag("bg_training")
+                if success:
+                    print("   ✅ 모델 학습 완료 - 서비스 시작 가능")
+                else:
+                    print("   ❌ 모델 학습 실패 - 서비스 제한될 수 있음")
+                    # 5분 후 재시도
+                    import schedule
+                    schedule.every(5).minutes.do(self._background_model_training).tag("bg_training")
                 
             else:
                 print("   ✅ 모든 ML 모델 파일 존재 확인")
                 
         except Exception as e:
             print(f"   ❌ 모델 존재 확인 오류: {e}")
-            print("   🏭 안전을 위해 더미 모델 생성...")
+            print("   🚀 안전을 위해 모델 학습 시도...")
             try:
-                self._create_dummy_models()
-            except Exception as dummy_error:
-                print(f"   ❌ 더미 모델 생성도 실패: {dummy_error}")
-    
-    def _create_dummy_models(self):
-        """즉시 사용 가능한 더미 모델 생성"""
-        try:
-            import subprocess
-            script_path = Path(__file__).parent / "create_dummy_models.py"
-            result = subprocess.run([sys.executable, str(script_path)], 
-                                  capture_output=True, text=True)
-            
-            if result.returncode == 0:
-                print("   ✅ 더미 모델 생성 성공")
-            else:
-                print(f"   ❌ 더미 모델 생성 실패: {result.stderr}")
-                
-        except Exception as e:
-            print(f"   ❌ 더미 모델 생성 오류: {e}")
+                self._bootstrap_ml_models()
+            except Exception as bootstrap_error:
+                print(f"   ❌ 모델 학습도 실패: {bootstrap_error}")
     
     def _background_model_training(self):
         """백그라운드 실제 모델 학습"""

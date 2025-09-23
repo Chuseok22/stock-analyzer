@@ -80,47 +80,77 @@ class GlobalMLEngine:
         
         print("🌍 글로벌 ML 엔진 초기화")
     
-    def detect_market_regime(self) -> Any:
-        """글로벌 시장 체제 감지 - 수정됨"""
+    def detect_market_regime(self) -> MarketCondition:
+        """글로벌 시장 체제 감지"""
         print("🔍 글로벌 시장 체제 분석 중...")
         
         try:
-            # 실제 MarketCondition 객체 반환
-            @dataclass
-            class MarketCondition:
-                regime: MarketRegime
-                volatility_level: float
-                risk_level: str
-                trend_strength: float
-                fear_greed_index: float
-            
-            # 실제 구현에서는 여기서 시장 데이터를 분석
-            # 현재는 기본값으로 안정적인 시장 상황 반환
-            return MarketCondition(
-                regime=MarketRegime.BULL_MARKET,
-                volatility_level=0.15,
-                risk_level="MEDIUM",
-                trend_strength=0.75,
-                fear_greed_index=65.0
-            )
+            with get_db_session() as db:
+                # 최근 60일 데이터로 시장 상황 분석
+                end_date = datetime.now().date()
+                start_date = end_date - timedelta(days=60)
+                
+                # 한국 시장 데이터
+                kr_market_data = self._get_market_index_data(db, MarketRegion.KR, start_date, end_date)
+                kr_returns = pd.Series(kr_market_data).pct_change().dropna() if kr_market_data else pd.Series([])
+                
+                # 미국 시장 데이터
+                us_market_data = self._get_market_index_data(db, MarketRegion.US, start_date, end_date)
+                us_returns = pd.Series(us_market_data).pct_change().dropna() if us_market_data else pd.Series([])
+                
+                # 기본값 설정
+                volatility_level = 0.20
+                correlation_kr_us = 0.5
+                trend_strength = 2.0
+                fear_greed_index = 50.0
+                
+                # 실제 계산 (데이터가 충분한 경우)
+                if len(kr_returns) > 10 and len(us_returns) > 10:
+                    # 변동성 계산 (두 시장 평균)
+                    kr_vol = kr_returns.std() * np.sqrt(252)  # 연환산
+                    us_vol = us_returns.std() * np.sqrt(252)
+                    volatility_level = (kr_vol + us_vol) / 2
+                    
+                    # 상관관계 계산
+                    min_length = min(len(kr_returns), len(us_returns))
+                    if min_length > 20:
+                        kr_recent = kr_returns.tail(min_length)
+                        us_recent = us_returns.tail(min_length)
+                        correlation_kr_us = kr_recent.corr(us_recent)
+                        if np.isnan(correlation_kr_us):
+                            correlation_kr_us = 0.5
+                    
+                    # 트렌드 강도
+                    trend_strength = self._calculate_trend_strength(kr_returns)
+                    
+                    # 공포/탐욕 지수
+                    fear_greed_index = self._calculate_fear_greed_index(kr_returns, us_returns, volatility_level)
+                
+                # 시장 체제 결정
+                regime = self._determine_market_regime(volatility_level, trend_strength, fear_greed_index)
+                
+                # 리스크 레벨 결정
+                risk_level = self._determine_risk_level(volatility_level, correlation_kr_us, fear_greed_index)
+                
+                return MarketCondition(
+                    regime=regime,
+                    volatility_level=volatility_level,
+                    correlation_kr_us=correlation_kr_us,
+                    fear_greed_index=fear_greed_index,
+                    trend_strength=trend_strength,
+                    risk_level=risk_level
+                )
             
         except Exception as e:
             print(f"❌ 시장 체제 감지 실패: {e}")
-            # 실패 시에도 기본 객체 반환
-            @dataclass
-            class DefaultMarketCondition:
-                regime: MarketRegime
-                volatility_level: float
-                risk_level: str
-                trend_strength: float
-                fear_greed_index: float
-            
-            return DefaultMarketCondition(
+            # 실패 시 기본값 반환
+            return MarketCondition(
                 regime=MarketRegime.SIDEWAYS_MARKET,
                 volatility_level=0.20,
-                risk_level="HIGH",
-                trend_strength=0.50,
-                fear_greed_index=50.0
+                correlation_kr_us=0.5,
+                fear_greed_index=50.0,
+                trend_strength=2.0,
+                risk_level="MEDIUM"
             )
     
     def save_predictions_for_learning(self, predictions: List, target_date: date = None):
@@ -337,19 +367,30 @@ class GlobalMLEngine:
         price_df['sma_20'] = price_df['close'].rolling(20, min_periods=1).mean()
         price_df['sma_50'] = price_df['close'].rolling(50, min_periods=1).mean()
         
-        # RSI
+        # RSI (수치 안정성 보완)
         delta = price_df['close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean()
+        
+        # loss가 0인 경우 처리 (inf/NaN 방지)
+        loss = loss.where(loss > 0, 1e-8)  # 0이면 아주 작은 값으로 대체
         rs = gain / loss
         price_df['rsi_14'] = 100 - (100 / (1 + rs))
         
-        # 볼린저 밴드
+        # RSI가 범위를 벗어나는 경우 안전 처리
+        price_df['rsi_14'] = price_df['rsi_14'].clip(0, 100).fillna(50)
+        
+        # 볼린저 밴드 (0으로 나누기 방지)
         price_df['bb_middle'] = price_df['sma_20']
         bb_std = price_df['close'].rolling(20, min_periods=1).std()
         price_df['bb_upper'] = price_df['bb_middle'] + (bb_std * 2)
         price_df['bb_lower'] = price_df['bb_middle'] - (bb_std * 2)
-        price_df['bb_percent'] = (price_df['close'] - price_df['bb_lower']) / (price_df['bb_upper'] - price_df['bb_lower'])
+        
+        # %B 계산 시 0으로 나누기 방지
+        bb_range = price_df['bb_upper'] - price_df['bb_lower']
+        bb_range = bb_range.where(bb_range > 1e-8, 1e-8)  # 매우 작은 범위는 최소값으로
+        price_df['bb_percent'] = (price_df['close'] - price_df['bb_lower']) / bb_range
+        price_df['bb_percent'] = price_df['bb_percent'].clip(0, 2).fillna(0.5)  # 0-2 범위로 제한
         
         # MACD
         ema_12 = price_df['close'].ewm(span=12).mean()
@@ -357,8 +398,11 @@ class GlobalMLEngine:
         price_df['macd'] = ema_12 - ema_26
         price_df['macd_signal'] = price_df['macd'].ewm(span=9).mean()
         
-        # 거래량 비율
-        price_df['volume_ratio'] = price_df['volume'] / price_df['volume'].rolling(20, min_periods=1).mean()
+        # 거래량 비율 (0으로 나누기 방지)
+        volume_ma = price_df['volume'].rolling(20, min_periods=1).mean()
+        volume_ma = volume_ma.where(volume_ma > 0, 1)  # 0이면 1로 대체
+        price_df['volume_ratio'] = price_df['volume'] / volume_ma
+        price_df['volume_ratio'] = price_df['volume_ratio'].clip(0, 10).fillna(1)  # 0-10 범위로 제한
         
         # 기본 피처 추가
         price_df['price_range'] = (price_df['high'] - price_df['low']) / price_df['close']
@@ -394,8 +438,11 @@ class GlobalMLEngine:
         df['rsi_divergence'] = df['rsi_14'] - df['rsi_ma_5']
         df['rsi_extreme'] = ((df['rsi_14'] > 70) | (df['rsi_14'] < 30)).astype(int)
         
-        # 볼린저 밴드 기반 피처
-        df['bb_squeeze'] = (df['bb_upper'] - df['bb_lower']) / df['close']
+        # 볼린저 밴드 기반 피처 (수치 안정성 보완)
+        bb_range_safe = (df['bb_upper'] - df['bb_lower']).where(
+            (df['bb_upper'] - df['bb_lower']) > 1e-8, 1e-8
+        )
+        df['bb_squeeze'] = bb_range_safe / df['close']
         df['bb_position'] = df['bb_percent']
         df['bb_breakout'] = ((df['close'] > df['bb_upper']) | (df['close'] < df['bb_lower'])).astype(int)
         
@@ -464,19 +511,21 @@ class GlobalMLEngine:
         if not self.market_condition:
             return df
         
-        # 시장 체제 더미 변수
+        # 시장 체제 더미 변수 (스칼라 bool 문제 해결)
         for regime in MarketRegime:
-            df[f'regime_{regime.value}'] = (self.market_condition.regime == regime).astype(int)
+            is_regime = self.market_condition.regime == regime
+            df[f'regime_{regime.value}'] = np.full(len(df), int(is_regime))
         
-        # 시장 조건 피처
-        df['market_volatility'] = self.market_condition.volatility_level
-        df['market_correlation'] = self.market_condition.correlation_kr_us
-        df['market_fear_greed'] = self.market_condition.fear_greed_index
-        df['market_trend_strength'] = self.market_condition.trend_strength
+        # 시장 조건 피처 (브로드캐스트)
+        df['market_volatility'] = np.full(len(df), self.market_condition.volatility_level)
+        df['market_correlation'] = np.full(len(df), self.market_condition.correlation_kr_us)
+        df['market_fear_greed'] = np.full(len(df), self.market_condition.fear_greed_index)
+        df['market_trend_strength'] = np.full(len(df), self.market_condition.trend_strength)
         
-        # 리스크 레벨 더미 변수
+        # 리스크 레벨 더미 변수 (브로드캐스트)
         for risk in ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']:
-            df[f'risk_{risk.lower()}'] = (self.market_condition.risk_level == risk).astype(int)
+            is_risk = self.market_condition.risk_level == risk
+            df[f'risk_{risk.lower()}'] = np.full(len(df), int(is_risk))
         
         return df
     
@@ -821,87 +870,15 @@ class GlobalMLEngine:
                     for feature, importance in top_features.items():
                         print(f"      {feature}: {importance:.3f}")
                 
-                # 모델 저장 - 네이밍 통일
-                self.models[f"{region.value}_ensemble"] = ensemble_model
-                self.scalers[f"{region.value}_ensemble"] = scaler
+                # 모델 저장 - 시장별 네이밍 통일
+                self.models[region.value] = ensemble_model
+                self.scalers[region.value] = scaler
                 
-                model_path = self.model_dir / f"ensemble_model_{self.model_version}.joblib"
-                scaler_path = self.model_dir / f"ensemble_scaler_{self.model_version}.joblib"
-                
-                joblib.dump(ensemble_model, model_path)
-                joblib.dump(scaler, scaler_path)
-                
-                print(f"   ✅ 앙상블 모델 저장: {model_path}")
-                return True
-                
-                print(f"   📈 학습 데이터: {len(X)}개 샘플, {len(X.columns)}개 피처")
-                
-                # 피처 스케일링
-                scaler = RobustScaler()
-                X_scaled = scaler.fit_transform(X)
-                
-                # 모델 정의 (앙상블)
-                models = {
-                    'rf': RandomForestRegressor(
-                        n_estimators=200,
-                        max_depth=15,
-                        min_samples_split=10,
-                        min_samples_leaf=5,
-                        random_state=42,
-                        n_jobs=-1
-                    ),
-                    'gbm': GradientBoostingRegressor(
-                        n_estimators=150,
-                        max_depth=8,
-                        learning_rate=0.1,
-                        subsample=0.8,
-                        random_state=42
-                    ),
-                    'ridge': Ridge(alpha=1.0, random_state=42)
-                }
-                
-                # 개별 모델 학습 및 평가
-                model_scores = {}
-                trained_models = {}
-                
-                tscv = TimeSeriesSplit(n_splits=5)
-                
-                for name, model in models.items():
-                    print(f"   🔧 {name} 모델 학습...")
-                    
-                    # 교차 검증
-                    cv_scores = cross_val_score(model, X_scaled, y, cv=tscv, scoring='neg_mean_squared_error')
-                    mse_score = -cv_scores.mean()
-                    
-                    # 전체 데이터로 학습
-                    model.fit(X_scaled, y)
-                    
-                    model_scores[name] = mse_score
-                    trained_models[name] = model
-                    
-                    print(f"      MSE: {mse_score:.6f}")
-                
-                # 앙상블 모델 생성
-                best_models = sorted(model_scores.items(), key=lambda x: x[1])[:2]  # 상위 2개
-                ensemble_models = [(name, trained_models[name]) for name, _ in best_models]
-                
-                ensemble = VotingRegressor(estimators=ensemble_models)
-                ensemble.fit(X_scaled, y)
-                
-                # 최종 평가
-                ensemble_score = -cross_val_score(ensemble, X_scaled, y, cv=tscv, scoring='neg_mean_squared_error').mean()
-                print(f"   🎯 앙상블 MSE: {ensemble_score:.6f}")
-                
-                # 모델 저장
                 model_path = self.model_dir / f"{region.value}_model_{self.model_version}.joblib"
                 scaler_path = self.model_dir / f"{region.value}_scaler_{self.model_version}.joblib"
                 
-                joblib.dump(ensemble, model_path)
+                joblib.dump(ensemble_model, model_path)
                 joblib.dump(scaler, scaler_path)
-                
-                # 메모리에 저장
-                self.models[region.value] = ensemble
-                self.scalers[region.value] = scaler
                 
                 print(f"   ✅ {region.value} 모델 저장: {model_path}")
                 return True
@@ -911,7 +888,7 @@ class GlobalMLEngine:
             return False
     
     def _get_future_return(self, db, stock_id: int, current_date: date, future_date: date) -> Optional[float]:
-        """미래 수익률 계산"""
+        """미래 수익률 계산 - 정렬 추가"""
         try:
             current_price = db.query(StockDailyPrice).filter(
                 StockDailyPrice.stock_id == stock_id,
@@ -922,7 +899,7 @@ class GlobalMLEngine:
                 StockDailyPrice.stock_id == stock_id,
                 StockDailyPrice.trade_date >= future_date,
                 StockDailyPrice.trade_date <= future_date + timedelta(days=7)
-            ).first()
+            ).order_by(StockDailyPrice.trade_date.asc()).first()  # 가장 이른 날짜 우선
             
             if current_price and future_price:
                 return_pct = (float(future_price.close_price) - float(current_price.close_price)) / float(current_price.close_price) * 100
@@ -934,16 +911,11 @@ class GlobalMLEngine:
             return None
     
     def _train_ensemble_model(self, model_config: dict = None) -> bool:
-        """글로벌 앙상블 모델 학습 - 한국과 미국 모델을 결합"""
+        """글로벌 앙상블 모델 학습 - 독립적 학습 방식"""
         print("🌍 글로벌 앙상블 모델 학습...")
         
         try:
-            # 한국과 미국 모델이 모두 학습되었는지 확인
-            if MarketRegion.KR.value not in self.models or MarketRegion.US.value not in self.models:
-                print("   ⚠️ 기본 시장 모델이 학습되지 않음")
-                return False
-            
-            # 앙상블을 위한 글로벌 데이터 수집
+            # 앙상블을 위한 글로벌 데이터 수집 (시장별 모델 의존성 제거)
             with get_db_session() as db:
                 # 한국 + 미국 대표 종목들로 글로벌 데이터셋 구성
                 kr_stocks = db.query(StockMaster).filter_by(
@@ -959,6 +931,8 @@ class GlobalMLEngine:
                 all_features = []
                 all_targets = []
                 all_regions = []
+                
+                print("   📊 글로벌 데이터셋 구성 중...")
                 
                 # 한국 데이터
                 for stock in kr_stocks:
@@ -988,11 +962,16 @@ class GlobalMLEngine:
                 print(f"   📈 앙상블 데이터: {len(X_global)}개 샘플, {len(X_global.columns)}개 피처")
                 
                 # 지역별 가중치 적용 (균형 조정)
-                kr_weight = 1.0 / np.sum(regions == MarketRegion.KR.value)
-                us_weight = 1.0 / np.sum(regions == MarketRegion.US.value)
+                kr_count = np.sum(regions == MarketRegion.KR.value)
+                us_count = np.sum(regions == MarketRegion.US.value)
                 
-                sample_weights = np.where(regions == MarketRegion.KR.value, kr_weight, us_weight)
-                sample_weights = sample_weights / sample_weights.sum() * len(sample_weights)  # 정규화
+                if kr_count > 0 and us_count > 0:
+                    kr_weight = 1.0 / kr_count
+                    us_weight = 1.0 / us_count
+                    sample_weights = np.where(regions == MarketRegion.KR.value, kr_weight, us_weight)
+                    sample_weights = sample_weights / sample_weights.sum() * len(sample_weights)  # 정규화
+                else:
+                    sample_weights = np.ones(len(X_global))
                 
                 # 글로벌 스케일러
                 global_scaler = RobustScaler()
@@ -1029,12 +1008,12 @@ class GlobalMLEngine:
                 
                 print(f"   📊 글로벌 앙상블 성능 - MSE: {mse:.4f}, R²: {r2:.4f}")
                 
-                # 모델 저장
+                # 모델 저장 (글로벌 앙상블은 별도 저장)
                 self.models['global_ensemble'] = global_ensemble
                 self.scalers['global_ensemble'] = global_scaler
                 
-                ensemble_path = self.model_dir / "global_ensemble_model.joblib"
-                ensemble_scaler_path = self.model_dir / "global_ensemble_scaler.joblib"
+                ensemble_path = self.model_dir / f"ensemble_model_{self.model_version}.joblib"
+                ensemble_scaler_path = self.model_dir / f"ensemble_scaler_{self.model_version}.joblib"
                 
                 joblib.dump(global_ensemble, ensemble_path)
                 joblib.dump(global_scaler, ensemble_scaler_path)
