@@ -81,44 +81,47 @@ class GlobalMLEngine:
         print("🌍 글로벌 ML 엔진 초기화")
     
     def detect_market_regime(self) -> Any:
-        """글로벌 시장 체제 감지"""
+        """글로벌 시장 체제 감지 - 수정됨"""
         print("🔍 글로벌 시장 체제 분석 중...")
         
         try:
-            # 임시 MockMarketCondition 클래스 생성 (테스트용)
-            class MockMarketCondition:
-                def __init__(self):
-                    # MarketRegime Enum과 호환되는 객체 생성
-                    class MockRegime:
-                        def __init__(self, value):
-                            self.value = value
-                    
-                    self.regime = MockRegime("BULL_MARKET")  # MarketRegime 호환
-                    self.volatility_level = 0.15
-                    self.risk_level = "MEDIUM"
-                    self.trend_strength = 0.75
-                    self.fear_greed_index = 65
+            # 실제 MarketCondition 객체 반환
+            @dataclass
+            class MarketCondition:
+                regime: MarketRegime
+                volatility_level: float
+                risk_level: str
+                trend_strength: float
+                fear_greed_index: float
             
             # 실제 구현에서는 여기서 시장 데이터를 분석
-            # 현재는 테스트를 위해 mock 객체 반환
-            return MockMarketCondition()
+            # 현재는 기본값으로 안정적인 시장 상황 반환
+            return MarketCondition(
+                regime=MarketRegime.BULL_MARKET,
+                volatility_level=0.15,
+                risk_level="MEDIUM",
+                trend_strength=0.75,
+                fear_greed_index=65.0
+            )
             
         except Exception as e:
             print(f"❌ 시장 체제 감지 실패: {e}")
             # 실패 시에도 기본 객체 반환
+            @dataclass
             class DefaultMarketCondition:
-                def __init__(self):
-                    class DefaultRegime:
-                        def __init__(self, value):
-                            self.value = value
-                    
-                    self.regime = DefaultRegime("UNKNOWN")
-                    self.volatility_level = 0.0
-                    self.risk_level = "UNKNOWN"
-                    self.trend_strength = 0.5
-                    self.fear_greed_index = 50
+                regime: MarketRegime
+                volatility_level: float
+                risk_level: str
+                trend_strength: float
+                fear_greed_index: float
             
-            return DefaultMarketCondition()
+            return DefaultMarketCondition(
+                regime=MarketRegime.SIDEWAYS_MARKET,
+                volatility_level=0.20,
+                risk_level="HIGH",
+                trend_strength=0.50,
+                fear_greed_index=50.0
+            )
     
     def save_predictions_for_learning(self, predictions: List, target_date: date = None):
         """학습을 위한 예측 결과 저장"""
@@ -608,108 +611,79 @@ class GlobalMLEngine:
         except Exception as e:
             print(f"   ❌ 데이터 준비 실패: {e}")
             return False
+    
+    def train_global_models_intensive(self, use_intensive_config: bool = True) -> bool:
+        """집중 학습 모드 - 중복 제거됨"""
+        print("� 집중 학습 모드...")
+        
+        try:
+            # 집중 학습 설정
+            intensive_config = {
+                'n_estimators': 500,
+                'max_depth': 15,
+                'min_samples_split': 5,
+                'min_samples_leaf': 2,
+                'max_features': 'sqrt',
+                'random_state': 42,
+                'n_jobs': -1,
+                'verbose': 1
+            }
+            
+            print(f"⚙️ 집중 학습 설정: {intensive_config}")
+            
+            # 1. 데이터 준비
+            print("📊 학습 데이터 준비...")
+            training_success = self._prepare_training_data()
             
             if not training_success:
                 print("❌ 학습 데이터 준비 실패")
                 return False
-    
-    def _prepare_training_data(self) -> bool:
-        """학습 데이터 준비 및 검증"""
-        print("🔍 학습 데이터 준비 중...")
-        
-        try:
-            with get_db_session() as db:
-                # 한국 시장 데이터 확인
-                kr_stocks = db.query(StockMaster).filter_by(
-                    market_region=MarketRegion.KR.value,
-                    is_active=True
-                ).count()
-                
-                # 미국 시장 데이터 확인
-                us_stocks = db.query(StockMaster).filter_by(
-                    market_region=MarketRegion.US.value,
-                    is_active=True
-                ).count()
-                
-                # 최근 데이터 확인
-                recent_date = datetime.now().date() - timedelta(days=7)
-                
-                kr_recent_data = db.query(StockDailyPrice).join(StockMaster).filter(
-                    StockMaster.market_region == MarketRegion.KR.value,
-                    StockDailyPrice.trade_date >= recent_date
-                ).count()
-                
-                us_recent_data = db.query(StockDailyPrice).join(StockMaster).filter(
-                    StockMaster.market_region == MarketRegion.US.value,
-                    StockDailyPrice.trade_date >= recent_date
-                ).count()
-                
-                print(f"   🇰🇷 한국 종목: {kr_stocks}개, 최근 데이터: {kr_recent_data}개")
-                print(f"   🇺🇸 미국 종목: {us_stocks}개, 최근 데이터: {us_recent_data}개")
-                
-                # 최소 데이터 요구사항 검증
-                if kr_stocks < 10 or us_stocks < 10:
-                    print("   ❌ 종목 데이터 부족")
-                    return False
-                
-                if kr_recent_data < 50 or us_recent_data < 50:
-                    print("   ❌ 최근 가격 데이터 부족")
-                    return False
-                
-                print("   ✅ 학습 데이터 준비 완료")
-                return True
-                
-        except Exception as e:
-            print(f"   ❌ 데이터 준비 실패: {e}")
-            return False
             
             # 2. 한국 시장 모델 학습
             print("🇰🇷 한국 시장 모델 학습...")
-            kr_success = self._train_market_model(MarketRegion.KR, model_config)
+            kr_success = self._train_market_model(MarketRegion.KR, intensive_config)
             
             # 3. 미국 시장 모델 학습
             print("🇺🇸 미국 시장 모델 학습...")
-            us_success = self._train_market_model(MarketRegion.US, model_config)
+            us_success = self._train_market_model(MarketRegion.US, intensive_config)
             
             # 4. 글로벌 앙상블 모델 학습
             print("🌍 글로벌 앙상블 모델 학습...")
-            ensemble_success = self._train_ensemble_model(model_config)
+            ensemble_success = self._train_ensemble_model(intensive_config)
             
             success = kr_success and us_success and ensemble_success
             
             if success:
-                if is_production:
-                    print("🎉 배포 환경 고성능 학습 완료!")
-                else:
-                    print("✅ 개발 환경 학습 완료")
-                
+                print("🎉 집중 학습 완료!")
                 # 모델 성능 검증
                 self._validate_trained_models()
             else:
-                print("❌ 모델 학습 실패")
+                print("❌ 집중 학습 실패")
             
             return success
             
         except Exception as e:
-            print(f"❌ 글로벌 모델 학습 실패: {e}")
+            print(f"❌ 집중 학습 오류: {e}")
             return False
     
     def _validate_trained_models(self):
-        """학습된 모델 성능 검증"""
+        """학습된 모델 성능 검증 - 경로 통일"""
         try:
             print("🔍 학습된 모델 성능 검증...")
             
-            # 모델 파일 존재 확인
-            model_dir = Path("storage/models/global")
+            # 모델 파일 존재 확인 (실제 저장 형식에 맞춤)
             required_models = [
-                "global_kr_model.joblib",
-                "global_us_model.joblib", 
-                "global_ensemble_model.joblib"
+                f"KR_model_{self.model_version}.joblib",
+                f"KR_scaler_{self.model_version}.joblib",
+                f"US_model_{self.model_version}.joblib", 
+                f"US_scaler_{self.model_version}.joblib",
+                f"ensemble_model_{self.model_version}.joblib",
+                f"ensemble_scaler_{self.model_version}.joblib"
             ]
             
             model_status = {}
             for model_name in required_models:
-                model_path = model_dir / model_name
+                model_path = self.model_dir / model_name  # self.model_dir 사용
                 if model_path.exists():
                     model_status[model_name] = "✅ 존재"
                     # 파일 크기 확인
@@ -785,7 +759,7 @@ class GlobalMLEngine:
                         time_weight = 1.0 / (days_back / 30.0 + 1.0)  # 시간 가중치
                         
                         # 변동성 가중치 (높은 변동성은 낮은 가중치)
-                        volatility = features['volatility_20d'].iloc[-1] if 'volatility_20d' in features.columns else 0.02
+                        volatility = features['volatility_20'].iloc[-1] if 'volatility_20' in features.columns else 0.02
                         volatility_weight = 1.0 / (volatility * 50 + 1.0)
                         
                         # 거래량 가중치 (높은 거래량은 높은 가중치)
@@ -847,17 +821,17 @@ class GlobalMLEngine:
                     for feature, importance in top_features.items():
                         print(f"      {feature}: {importance:.3f}")
                 
-                # 모델 저장
-                self.models[region.value] = ensemble_model
-                self.scalers[region.value] = scaler
+                # 모델 저장 - 네이밍 통일
+                self.models[f"{region.value}_ensemble"] = ensemble_model
+                self.scalers[f"{region.value}_ensemble"] = scaler
                 
-                model_path = self.model_dir / f"{region.value}_ensemble_model.pkl"
-                scaler_path = self.model_dir / f"{region.value}_scaler.pkl"
+                model_path = self.model_dir / f"ensemble_model_{self.model_version}.joblib"
+                scaler_path = self.model_dir / f"ensemble_scaler_{self.model_version}.joblib"
                 
                 joblib.dump(ensemble_model, model_path)
                 joblib.dump(scaler, scaler_path)
                 
-                print(f"   ✅ {region.value} 모델 학습 완료")
+                print(f"   ✅ 앙상블 모델 저장: {model_path}")
                 return True
                 
                 print(f"   📈 학습 데이터: {len(X)}개 샘플, {len(X.columns)}개 피처")
