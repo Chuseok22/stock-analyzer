@@ -66,7 +66,7 @@ class GlobalPrediction:
 
 
 class GlobalMLEngine:
-    """글로벌 머신러닝 엔진"""
+    """글로벌 머신러닝 엔진 - 고도화된 ML 통합"""
     
     def __init__(self):
         self.models = {}
@@ -77,6 +77,26 @@ class GlobalMLEngine:
         # 모델 저장 경로
         self.model_dir = Path(__file__).parent.parent.parent / "storage" / "models" / "global"
         self.model_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 고도화된 ML 엔진 통합
+        try:
+            from app.ml.advanced_ml_engine import AdvancedMLEngine
+            self.advanced_engine = AdvancedMLEngine()
+            self.use_advanced_ml = True
+            print("🧠 고도화된 ML 엔진 통합 완료")
+        except Exception as e:
+            print(f"⚠️ 고도화된 ML 엔진 로드 실패, 기본 엔진 사용: {e}")
+            self.advanced_engine = None
+            self.use_advanced_ml = False
+        
+        # 동적 유니버스 관리자
+        try:
+            from app.services.dynamic_universe_manager import DynamicUniverseManager
+            self.universe_manager = DynamicUniverseManager()
+            print("📋 동적 유니버스 관리자 통합 완료")
+        except Exception as e:
+            print(f"⚠️ 동적 유니버스 관리자 로드 실패: {e}")
+            self.universe_manager = None
         
         print("🌍 글로벌 ML 엔진 초기화")
     
@@ -1067,13 +1087,55 @@ class GlobalMLEngine:
             print(f"   ⚠️ {stock.stock_code} 데이터 수집 실패: {e}")
             return [], []
     
-    def predict_stocks(self, region: MarketRegion, top_n: int = 5) -> List[GlobalPrediction]:
-        """주식 예측 실행 - 모델 없으면 자동 학습"""
+    async def predict_stocks(self, region: MarketRegion, top_n: int = 5) -> List[GlobalPrediction]:
+        """주식 예측 실행 - 고도화된 ML 우선 사용"""
         print(f"🎯 {region.value} 주식 예측 중... (상위 {top_n}개)")
         
         predictions = []
         
         try:
+            # 1. 고도화된 ML 엔진 사용 시도
+            if self.use_advanced_ml and self.advanced_engine:
+                print(f"   🧠 {region.value} 고도화된 ML 예측 시도...")
+                try:
+                    advanced_predictions = await self.advanced_engine.predict_with_advanced_models(region, top_n)
+                    
+                    if advanced_predictions:
+                        # 고도화된 예측 결과를 GlobalPrediction 형식으로 변환
+                        for pred in advanced_predictions:
+                            global_pred = GlobalPrediction(
+                                stock_code=pred['stock_code'],
+                                market_region=region.value,
+                                predicted_return=pred['predicted_return'],
+                                confidence_score=pred['confidence'] * 100,
+                                risk_score=self._calculate_risk_from_return(pred['predicted_return']),
+                                recommendation=self._determine_recommendation_from_return(pred['predicted_return'], pred['confidence']),
+                                target_price=None,  # 계산 필요시 추가
+                                stop_loss=None,     # 계산 필요시 추가
+                                reasoning=[f"고도화된 {pred['model_type']} 모델 기반 예측", f"신뢰도: {pred['confidence']:.1%}"]
+                            )
+                            predictions.append(global_pred)
+                        
+                        print(f"   ✅ {region.value} 고도화된 ML 예측 성공: {len(predictions)}개")
+                        return predictions
+                        
+                except Exception as e:
+                    print(f"   ⚠️ {region.value} 고도화된 ML 예측 실패: {e}")
+            
+            # 2. 기본 ML 엔진 폴백
+            print(f"   🔄 {region.value} 기본 ML 엔진으로 폴백...")
+            
+            # 동적 유니버스 사용
+            if self.universe_manager:
+                try:
+                    stock_codes = await self.universe_manager.get_current_universe(region)
+                    print(f"   📋 동적 유니버스: {len(stock_codes)}개 종목")
+                except Exception as e:
+                    print(f"   ⚠️ 동적 유니버스 조회 실패: {e}")
+                    stock_codes = self._get_fallback_stock_codes(region)
+            else:
+                stock_codes = self._get_fallback_stock_codes(region)
+            
             # 모델 로드
             if region.value not in self.models:
                 self._load_model(region)
@@ -1324,6 +1386,32 @@ class GlobalMLEngine:
             reasoning.append("기본 기술적 분석 기반")
         
         return reasoning if reasoning else ["포괄적 시장 분석 기반"]
+    
+    def _calculate_risk_from_return(self, predicted_return: float) -> float:
+        """예측 수익률 기반 리스크 점수 계산"""
+        # 극단적 예측일수록 리스크 증가
+        risk_score = min(abs(predicted_return) * 2, 80)  # 최대 80점
+        return max(10, risk_score)  # 최소 10점
+    
+    def _determine_recommendation_from_return(self, predicted_return: float, confidence: float) -> str:
+        """수익률과 신뢰도 기반 추천 등급 결정"""
+        if predicted_return > 5 and confidence > 0.7:
+            return "STRONG_BUY"
+        elif predicted_return > 2 and confidence > 0.6:
+            return "BUY"
+        elif predicted_return > -2 and predicted_return <= 2:
+            return "HOLD"
+        elif predicted_return > -5:
+            return "SELL"
+        else:
+            return "STRONG_SELL"
+    
+    def _get_fallback_stock_codes(self, region: MarketRegion) -> List[str]:
+        """폴백용 기본 종목 코드"""
+        if region == MarketRegion.KR:
+            return ['005930', '000660', '035420', '005380', '000270']
+        else:
+            return ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA']
 
 
 def main():
