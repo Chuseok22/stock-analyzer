@@ -67,6 +67,15 @@ class SmartAlertSystem:
         self.notification_service = NotificationService()
         self.market_time_manager = MarketTimeManager()
         
+        # 하락장 감지 시스템 통합
+        try:
+            from app.services.bear_market_detector import BearMarketDetector
+            self.bear_detector = BearMarketDetector()
+            print("🐻 하락장 감지 시스템 통합 완료")
+        except Exception as e:
+            print(f"⚠️ 하락장 감지 시스템 로드 실패: {e}")
+            self.bear_detector = None
+        
         # 시간대 설정
         self.kr_timezone = pytz.timezone('Asia/Seoul')
         self.us_timezone = pytz.timezone('America/New_York')
@@ -351,11 +360,44 @@ class SmartAlertSystem:
             print(f"   상세 오류: {traceback.format_exc()}")
             return None
     
-    def generate_bear_market_warning(self) -> Optional[SmartAlert]:
-        """하락장 경고 알림 생성"""
+    async def generate_bear_market_warning(self) -> Optional[SmartAlert]:
+        """하락장 경고 알림 생성 - 고도화된 감지 시스템 사용"""
         print("🐻 하락장 경고 알림 검사 중...")
         
         try:
+            # 1. 고도화된 하락장 감지 시스템 사용
+            if self.bear_detector:
+                bear_alert = await self.bear_detector.generate_bear_market_alert()
+                
+                if bear_alert:
+                    print(f"   🚨 고도화된 하락장 감지: {bear_alert['severity']}")
+                    
+                    # 하락장 알림을 SmartAlert 형식으로 변환
+                    return SmartAlert(
+                        alert_type=AlertType.BEAR_MARKET_WARNING,
+                        market_region="GLOBAL",
+                        title=bear_alert['title'],
+                        message=bear_alert['message'],
+                        stocks=[{
+                            'code': rec.etf_code,
+                            'name': rec.etf_name,
+                            'expected_return': rec.expected_return,
+                            'allocation': rec.target_allocation,
+                            'risk_level': rec.risk_level
+                        } for rec in bear_alert.get('recommendations', [])],
+                        urgency_level=bear_alert['urgency_level'],
+                        action_required=True,
+                        recommendations=[
+                            f"인버스 ETF 포지션 고려",
+                            f"리스크 관리 강화",
+                            f"포트폴리오 방어적 조정"
+                        ],
+                        created_at=datetime.now()
+                    )
+            
+            # 2. 기본 하락장 감지 로직 (폴백)
+            print("   🔄 기본 하락장 감지 로직 사용...")
+            
             # 시장 체제 분석
             market_condition = self.ml_engine.detect_market_regime()
             
@@ -364,8 +406,8 @@ class SmartAlertSystem:
                 return None
             
             # 한국/미국 시장 모두 분석
-            kr_predictions = self.ml_engine.predict_stocks(MarketRegion.KR, top_n=10)
-            us_predictions = self.ml_engine.predict_stocks(MarketRegion.US, top_n=10)
+            kr_predictions = await self.ml_engine.predict_stocks(MarketRegion.KR, top_n=10)
+            us_predictions = await self.ml_engine.predict_stocks(MarketRegion.US, top_n=10)
             
             # 전반적인 부정적 전망 체크
             kr_negative = sum(1 for p in kr_predictions if p.predicted_return < -2) / len(kr_predictions) if kr_predictions else 0
@@ -666,29 +708,26 @@ class SmartAlertSystem:
                 print("   ⚠️ Telegram 설정이 완료되지 않음")
                 return False
             
-            # 메시지 포맷팅 (Telegram Markdown 지원)
-            message = f"""
-🚨 **{alert.title}**
+            # 안전한 텔레그램 메시지 형식 (마크다운 없이)
+            message = f"""🚨 {alert.title}
 
-**긴급도:** {alert.urgency_level}
-**시장:** {alert.market_region}
-**시간:** {alert.created_at.strftime("%Y-%m-%d %H:%M")}
+긴급도: {alert.urgency_level}
+시장: {alert.market_region}
+시간: {alert.created_at.strftime("%Y-%m-%d %H:%M")}
 
-{alert.message}
-"""
+{alert.message}"""
             
             # 추천사항이 있다면 추가
             if alert.recommendations:
-                message += "\n\n**📋 권장사항:**\n"
+                message += "\n\n📋 권장사항:\n"
                 for i, rec in enumerate(alert.recommendations, 1):
                     message += f"{i}. {rec}\n"
             
-            # Telegram API 호출
+            # Telegram API 호출 (마크다운 없이)
             url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
             payload = {
                 "chat_id": settings.telegram_chat_id,
-                "text": message,
-                "parse_mode": "Markdown"
+                "text": message
             }
             
             response = requests.post(url, json=payload, timeout=10)

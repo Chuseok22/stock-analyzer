@@ -375,30 +375,40 @@ class NotificationService:
   def _send_telegram_notification(self, message_data: Dict) -> bool:
     """Send notification via Telegram bot."""
     try:
-      # Format message for Telegram
-      message = f"📈 *{message_data['title']}*\n\n"
+      # 안전한 텔레그램 메시지 형식 (마크다운 없이)
+      message = f"📈 {message_data['title']}\n\n"
       message += f"📊 {message_data['summary']}\n\n"
-      message += "🎯 *추천 종목*\n"
+      message += "🎯 추천 종목\n"
 
       for i, rec in enumerate(message_data['recommendations'], 1):
         confidence_emoji = "🟢" if rec['score'] > 0.7 else "🟡" if rec['score'] > 0.5 else "🟠"
 
-        message += f"\n{i}\\. *{rec['stock_name']}* \\({rec['stock_code']}\\)\n"
-        message += f"{confidence_emoji} 신뢰도: {rec['score']:.1%} \\| 예상수익: {rec['expected_return']}\n"
-        message += f"💡 _{rec['reason']['summary']}_\n"
+        message += f"\n{i}. {rec['stock_name']} ({rec['stock_code']})\n"
+        message += f"{confidence_emoji} 신뢰도: {rec['score']:.1%} | 예상수익: {rec['expected_return']}\n"
+        message += f"💡 {rec['reason']['summary']}\n"
 
-      message += "\n⚠️ *투자 위험 알림*: AI 예측 기반이므로 신중한 판단이 필요합니다\\."
+      message += "\n⚠️ 투자 위험 알림: AI 예측 기반이므로 신중한 판단이 필요합니다."
 
-      # Send via Telegram API
+      # Send via Telegram API (마크다운 없이)
       url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
       payload = {
         "chat_id": settings.telegram_chat_id,
-        "text": message,
-        "parse_mode": "MarkdownV2"
+        "text": message
       }
 
-      response = requests.post(url, json=payload)
-      return response.status_code == 200
+      response = requests.post(url, json=payload, timeout=10)
+      
+      if response.status_code == 200:
+        result = response.json()
+        if result.get('ok'):
+          logger.info("Telegram message sent successfully")
+          return True
+        else:
+          logger.error(f"Telegram API error: {result.get('description')}")
+          return False
+      else:
+        logger.error(f"Telegram HTTP error: {response.status_code}")
+        return False
 
     except Exception as e:
       logger.error(f"Telegram sending failed: {e}")

@@ -27,51 +27,23 @@ class UnifiedDataCollector:
         self.kis_client = KISAPIClient()
         self.alpha_vantage_client = AlphaVantageAPIClient()
         
-        # 주요 종목 리스트
-        self.kr_symbols = [
-            '005930',  # 삼성전자
-            '000660',  # SK하이닉스
-            '035420',  # NAVER
-            '005380',  # 현대차
-            '000270',  # 기아
-            '051910',  # LG화학
-            '068270',  # 셀트리온
-            '028260',  # 삼성물산
-            '055550',  # 신한지주
-            '086790',  # 하나금융지주
-            '003670',  # 포스코홀딩스
-            '096770',  # SK이노베이션
-            '032830',  # 삼성생명
-            '017670',  # SK텔레콤
-            '090430',  # 아모레퍼시픽
-            '009150',  # 삼성전기
-            '018260',  # 삼성에스디에스
-            '323410',  # 카카오뱅크
-            '377300',  # 카카오페이
-            '035720',  # 카카오
+        # 동적 종목 유니버스 관리자
+        from app.services.dynamic_universe_manager import DynamicUniverseManager
+        self.universe_manager = DynamicUniverseManager()
+        
+        # 기본 종목 리스트 (폴백용)
+        self.fallback_kr_symbols = [
+            '005930', '000660', '035420', '005380', '000270',
+            '051910', '068270', '028260', '055550', '086790',
+            '003670', '096770', '032830', '017670', '090430',
+            '009150', '018260', '323410', '377300', '035720'
         ]
         
-        self.us_symbols = [
-            'AAPL',   # Apple
-            'MSFT',   # Microsoft
-            'GOOGL',  # Alphabet
-            'AMZN',   # Amazon
-            'TSLA',   # Tesla
-            'META',   # Meta
-            'NVDA',   # NVIDIA
-            'NFLX',   # Netflix
-            'ADBE',   # Adobe
-            'CRM',    # Salesforce
-            'PYPL',   # PayPal
-            'INTC',   # Intel
-            'AMD',    # AMD
-            'QCOM',   # Qualcomm
-            'AVGO',   # Broadcom
-            'TXN',    # Texas Instruments
-            'ORCL',   # Oracle
-            'IBM',    # IBM
-            'NOW',    # ServiceNow
-            'UBER',   # Uber
+        self.fallback_us_symbols = [
+            'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA',
+            'META', 'NVDA', 'NFLX', 'ADBE', 'CRM',
+            'PYPL', 'INTC', 'AMD', 'QCOM', 'AVGO',
+            'TXN', 'ORCL', 'IBM', 'NOW', 'UBER'
         ]
     
     async def collect_daily_data(self) -> bool:
@@ -97,15 +69,24 @@ class UnifiedDataCollector:
             return False
     
     async def collect_korean_daily_data(self) -> bool:
-        """한국 시장 일일 데이터 수집"""
+        """한국 시장 일일 데이터 수집 - 동적 유니버스 활용"""
         self.logger.info("🇰🇷 한국 시장 최신 데이터 수집")
         
         try:
+            # 동적 유니버스에서 종목 목록 가져오기
+            try:
+                kr_symbols = await self.universe_manager.get_current_universe(MarketRegion.KR)
+                self.logger.info(f"   📋 동적 유니버스 종목: {len(kr_symbols)}개")
+            except Exception as e:
+                self.logger.warning(f"동적 유니버스 조회 실패, 폴백 사용: {e}")
+                kr_symbols = self.fallback_kr_symbols
+            
             with get_db_session() as db:
-                # 활성 한국 종목 목록
-                kr_stocks = db.query(StockMaster).filter_by(
-                    market_region=MarketRegion.KR.value,
-                    is_active=True
+                # 동적 유니버스 종목들의 DB 정보 조회
+                kr_stocks = db.query(StockMaster).filter(
+                    StockMaster.market_region == MarketRegion.KR.value,
+                    StockMaster.is_active == True,
+                    StockMaster.stock_code.in_(kr_symbols)
                 ).all()
                 
                 if not kr_stocks:
@@ -209,15 +190,24 @@ class UnifiedDataCollector:
             return False
     
     async def collect_us_daily_data(self) -> bool:
-        """미국 시장 일일 데이터 수집"""
+        """미국 시장 일일 데이터 수집 - 동적 유니버스 활용"""
         self.logger.info("🇺🇸 미국 시장 최신 데이터 수집")
         
         try:
+            # 동적 유니버스에서 종목 목록 가져오기
+            try:
+                us_symbols = await self.universe_manager.get_current_universe(MarketRegion.US)
+                self.logger.info(f"   📋 동적 유니버스 종목: {len(us_symbols)}개")
+            except Exception as e:
+                self.logger.warning(f"동적 유니버스 조회 실패, 폴백 사용: {e}")
+                us_symbols = self.fallback_us_symbols
+            
             with get_db_session() as db:
-                # 활성 미국 종목 목록
-                us_stocks = db.query(StockMaster).filter_by(
-                    market_region=MarketRegion.US.value,
-                    is_active=True
+                # 동적 유니버스 종목들의 DB 정보 조회
+                us_stocks = db.query(StockMaster).filter(
+                    StockMaster.market_region == MarketRegion.US.value,
+                    StockMaster.is_active == True,
+                    StockMaster.stock_code.in_(us_symbols)
                 ).all()
                 
                 if not us_stocks:
