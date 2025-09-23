@@ -313,21 +313,21 @@ class GlobalMLEngine:
     def _build_feature_dataframe(self, price_data: List, stock: StockMaster) -> pd.DataFrame:
         """기본 피처 DataFrame 구성"""
         
-        # 가격 데이터 변환
+        # 가격 데이터 변환 (날짜는 숫자형으로 변환)
         price_df = pd.DataFrame([{
-            'date': p.trade_date,
+            'date_ordinal': p.trade_date.toordinal(),  # 날짜를 서수(정수)로 변환
             'open': float(p.open_price),
             'high': float(p.high_price),
             'low': float(p.low_price),
             'close': float(p.close_price),
-            'volume': p.volume,
+            'volume': int(p.volume) if p.volume else 0,
             'adjusted_close': float(p.adjusted_close_price) if p.adjusted_close_price else float(p.close_price),
-            'daily_return': p.daily_return_pct or 0.0,
+            'daily_return': float(p.daily_return_pct) if p.daily_return_pct else 0.0,
             'vwap': float(p.vwap) if p.vwap else float(p.close_price)
         } for p in price_data])
         
         # 기본 기술적 지표 계산
-        price_df = price_df.sort_values('date').reset_index(drop=True)
+        price_df = price_df.sort_values('date_ordinal').reset_index(drop=True)
         
         # 이동평균
         price_df['sma_5'] = price_df['close'].rolling(5, min_periods=1).mean()
@@ -958,6 +958,161 @@ class GlobalMLEngine:
             
         except Exception:
             return None
+    
+    def _train_ensemble_model(self, model_config: dict = None) -> bool:
+        """글로벌 앙상블 모델 학습 - 한국과 미국 모델을 결합"""
+        print("🌍 글로벌 앙상블 모델 학습...")
+        
+        try:
+            # 한국과 미국 모델이 모두 학습되었는지 확인
+            if MarketRegion.KR.value not in self.models or MarketRegion.US.value not in self.models:
+                print("   ⚠️ 기본 시장 모델이 학습되지 않음")
+                return False
+            
+            # 앙상블을 위한 글로벌 데이터 수집
+            with get_db_session() as db:
+                # 한국 + 미국 대표 종목들로 글로벌 데이터셋 구성
+                kr_stocks = db.query(StockMaster).filter_by(
+                    market_region=MarketRegion.KR.value,
+                    is_active=True
+                ).limit(10).all()
+                
+                us_stocks = db.query(StockMaster).filter_by(
+                    market_region=MarketRegion.US.value,
+                    is_active=True
+                ).limit(10).all()
+                
+                all_features = []
+                all_targets = []
+                all_regions = []
+                
+                # 한국 데이터
+                for stock in kr_stocks:
+                    features, targets = self._collect_stock_data_for_ensemble(db, stock, MarketRegion.KR)
+                    if features is not None and len(features) > 0:
+                        all_features.extend(features)
+                        all_targets.extend(targets)
+                        all_regions.extend([MarketRegion.KR.value] * len(features))
+                
+                # 미국 데이터
+                for stock in us_stocks:
+                    features, targets = self._collect_stock_data_for_ensemble(db, stock, MarketRegion.US)
+                    if features is not None and len(features) > 0:
+                        all_features.extend(features)
+                        all_targets.extend(targets)
+                        all_regions.extend([MarketRegion.US.value] * len(features))
+                
+                if len(all_features) < 100:
+                    print(f"   ⚠️ 앙상블 학습 데이터 부족: {len(all_features)}개")
+                    return False
+                
+                # 글로벌 피처 DataFrame 생성
+                X_global = pd.DataFrame(all_features)
+                y_global = np.array(all_targets)
+                regions = np.array(all_regions)
+                
+                print(f"   📈 앙상블 데이터: {len(X_global)}개 샘플, {len(X_global.columns)}개 피처")
+                
+                # 지역별 가중치 적용 (균형 조정)
+                kr_weight = 1.0 / np.sum(regions == MarketRegion.KR.value)
+                us_weight = 1.0 / np.sum(regions == MarketRegion.US.value)
+                
+                sample_weights = np.where(regions == MarketRegion.KR.value, kr_weight, us_weight)
+                sample_weights = sample_weights / sample_weights.sum() * len(sample_weights)  # 정규화
+                
+                # 글로벌 스케일러
+                global_scaler = RobustScaler()
+                X_scaled = global_scaler.fit_transform(X_global)
+                
+                # 글로벌 앙상블 모델 정의
+                global_ensemble = VotingRegressor([
+                    ('rf_global', RandomForestRegressor(
+                        n_estimators=model_config.get('n_estimators', 200),
+                        max_depth=model_config.get('max_depth', 12),
+                        min_samples_split=5,
+                        min_samples_leaf=2,
+                        random_state=42,
+                        n_jobs=-1
+                    )),
+                    ('gb_global', GradientBoostingRegressor(
+                        n_estimators=150,
+                        max_depth=8,
+                        learning_rate=0.08,
+                        subsample=0.8,
+                        random_state=42
+                    )),
+                    ('ridge_global', Ridge(alpha=1.0, random_state=42))
+                ])
+                
+                # 앙상블 모델 학습
+                print("   🏋️ 글로벌 앙상블 학습 중...")
+                global_ensemble.fit(X_scaled, y_global, sample_weight=sample_weights)
+                
+                # 성능 평가
+                y_pred = global_ensemble.predict(X_scaled)
+                mse = mean_squared_error(y_global, y_pred, sample_weight=sample_weights)
+                r2 = r2_score(y_global, y_pred, sample_weight=sample_weights)
+                
+                print(f"   📊 글로벌 앙상블 성능 - MSE: {mse:.4f}, R²: {r2:.4f}")
+                
+                # 모델 저장
+                self.models['global_ensemble'] = global_ensemble
+                self.scalers['global_ensemble'] = global_scaler
+                
+                ensemble_path = self.model_dir / "global_ensemble_model.joblib"
+                ensemble_scaler_path = self.model_dir / "global_ensemble_scaler.joblib"
+                
+                joblib.dump(global_ensemble, ensemble_path)
+                joblib.dump(global_scaler, ensemble_scaler_path)
+                
+                print("   ✅ 글로벌 앙상블 모델 학습 완료")
+                return True
+                
+        except Exception as e:
+            print(f"   ❌ 글로벌 앙상블 학습 실패: {e}")
+            import traceback
+            print(f"   상세 오류: {traceback.format_exc()}")
+            return False
+    
+    def _collect_stock_data_for_ensemble(self, db, stock: StockMaster, region: MarketRegion) -> Tuple[List, List]:
+        """앙상블용 주식 데이터 수집"""
+        try:
+            features_list = []
+            targets_list = []
+            
+            # 최근 60일간 데이터 수집
+            end_date = datetime.now().date()
+            
+            for days_back in range(30, 90, 2):  # 2일 간격으로 샘플링
+                current_date = end_date - timedelta(days=days_back)
+                
+                # 피처 생성
+                features = self.prepare_global_features(stock.stock_id, current_date)
+                if features is None or len(features) < 30:
+                    continue
+                
+                # 미래 수익률 (타겟)
+                future_date = current_date + timedelta(days=5)
+                target = self._get_future_return(db, stock.stock_id, current_date, future_date)
+                
+                if target is None:
+                    continue
+                
+                # 최신 피처 데이터
+                latest_features = features.iloc[-1].fillna(0).to_dict()
+                
+                # 지역 정보 추가
+                latest_features['is_kr'] = 1.0 if region == MarketRegion.KR else 0.0
+                latest_features['is_us'] = 1.0 if region == MarketRegion.US else 0.0
+                
+                features_list.append(latest_features)
+                targets_list.append(target)
+            
+            return features_list, targets_list
+            
+        except Exception as e:
+            print(f"   ⚠️ {stock.stock_code} 데이터 수집 실패: {e}")
+            return [], []
     
     def predict_stocks(self, region: MarketRegion, top_n: int = 5) -> List[GlobalPrediction]:
         """주식 예측 실행"""
