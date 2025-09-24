@@ -3,6 +3,7 @@
 Market Regime Detection, Cross-Market Correlation, Deep Feature Engineering
 """
 import sys
+import os
 from pathlib import Path
 from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Optional, Tuple
@@ -72,13 +73,30 @@ class GlobalMLEngine:
         self.models = {}
         self.scalers = {}
         self.market_condition = None
-        self.model_version = "v3.0_global"
+        self.model_version = "v3.1_optimized"
         
-        # 모델 저장 경로
-        self.model_dir = Path(__file__).parent.parent.parent / "storage" / "models" / "global"
+        # 모델 저장 경로 (환경별 대응)
+        if os.path.exists("/app/storage"):  # Docker 환경
+            self.model_dir = Path("/app/storage/models/global")
+        else:  # 로컬 환경
+            self.model_dir = Path(__file__).parent.parent.parent / "storage" / "models" / "global"
         self.model_dir.mkdir(parents=True, exist_ok=True)
         
-        print("🌍 글로벌 ML 엔진 초기화")
+        # 메모리 최적화를 위한 캐시 제한
+        self.max_cache_size = 1000  # 최대 캐시 항목 수
+        self.feature_cache = {}
+        
+        print("🌍 글로벌 ML 엔진 초기화 (최적화 버전)")
+    
+    def _manage_cache(self):
+        """메모리 최적화를 위한 캐시 관리"""
+        if len(self.feature_cache) > self.max_cache_size:
+            # 가장 오래된 50% 제거
+            remove_count = len(self.feature_cache) // 2
+            keys_to_remove = list(self.feature_cache.keys())[:remove_count]
+            for key in keys_to_remove:
+                del self.feature_cache[key]
+            print(f"🧹 캐시 정리: {remove_count}개 항목 제거")
     
     def detect_market_regime(self) -> MarketCondition:
         """글로벌 시장 체제 감지"""
@@ -529,7 +547,7 @@ class GlobalMLEngine:
         
         return df
     
-    def train_global_models(self, use_intensive_config: bool = False) -> bool:
+    def train_global_models(self, use_intensive_config: bool = False, incremental: bool = True) -> bool:
         """글로벌 ML 모델 학습 - 배포 환경 최적화"""
         print("🏋️ 글로벌 ML 모델 학습 시작...")
         
@@ -580,11 +598,11 @@ class GlobalMLEngine:
             
             # 2. 한국 시장 모델 학습
             print("🇰🇷 한국 시장 모델 학습...")
-            kr_success = self._train_market_model(MarketRegion.KR, model_config)
+            kr_success = self._train_market_model(MarketRegion.KR, model_config, incremental)
             
             # 3. 미국 시장 모델 학습
             print("🇺🇸 미국 시장 모델 학습...")
-            us_success = self._train_market_model(MarketRegion.US, model_config)
+            us_success = self._train_market_model(MarketRegion.US, model_config, incremental)
             
             # 4. 글로벌 앙상블 모델 학습
             print("🌍 글로벌 앙상블 모델 학습...")
@@ -755,9 +773,30 @@ class GlobalMLEngine:
         except Exception as e:
             print(f"❌ 모델 검증 실패: {e}")
     
-    def _train_market_model(self, region: MarketRegion, model_config: dict = None) -> bool:
-        """시장별 모델 학습"""
-        print(f"🎯 {region.value} 시장 모델 학습...")
+    def _train_market_model(self, region: MarketRegion, model_config: dict = None, incremental: bool = True) -> bool:
+        """시장별 모델 학습 - 증분 학습 지원"""
+        
+        # 기존 모델 존재 여부 확인
+        existing_model = None
+        existing_scaler = None
+        
+        if incremental:
+            model_path = self.model_dir / f"{region.value}_model_{self.model_version}.joblib"
+            scaler_path = self.model_dir / f"{region.value}_scaler_{self.model_version}.joblib"
+            
+            if model_path.exists() and scaler_path.exists():
+                try:
+                    existing_model = joblib.load(model_path)
+                    existing_scaler = joblib.load(scaler_path)
+                    print(f"🔄 {region.value} 기존 모델 로드 완료 - 증분 학습 모드")
+                except Exception as e:
+                    print(f"⚠️ 기존 모델 로드 실패: {e} - 전체 학습으로 전환")
+                    existing_model = None
+                    existing_scaler = None
+            else:
+                print(f"🆕 {region.value} 기존 모델 없음 - 전체 학습 모드")
+        else:
+            print(f"🎯 {region.value} 전체 재학습 모드")
         
         if model_config is None:
             model_config = {
@@ -779,13 +818,19 @@ class GlobalMLEngine:
                 all_targets = []
                 sample_weights = []  # 가중치 추가
                 
+                # 증분 학습인 경우 최근 30일만, 전체 학습인 경우 150일
+                days_range = range(5, 30) if existing_model else range(30, 150)
+                learning_type = "증분" if existing_model else "전체"
+                
+                print(f"   📅 {learning_type} 학습: 최근 {max(days_range) - min(days_range)}일 데이터 사용")
+                
                 for stock in stocks[:20]:  # 상위 20개 종목으로 제한
                     print(f"   📊 {stock.stock_code} 데이터 수집...")
                     
-                    # 최근 180일 데이터
+                    # 학습 데이터 기간 설정
                     end_date = datetime.now().date()
                     
-                    for days_back in range(30, 150):  # 슬라이딩 윈도우
+                    for days_back in days_range:  # 학습 모드에 따른 데이터 범위
                         current_date = end_date - timedelta(days=days_back)
                         
                         # 피처 생성
@@ -834,22 +879,43 @@ class GlobalMLEngine:
                 print(f"   📈 학습 데이터: {len(X)}개 샘플, {len(X.columns)}개 피처")
                 print(f"   ⚖️ 가중치 범위: {weights.min():.3f} - {weights.max():.3f}")
                 
-                # 피처 스케일링
-                scaler = RobustScaler()  # 아웃라이어에 강건한 스케일러
-                X_scaled = scaler.fit_transform(X)
+                # 피처 스케일링 (기존 스케일러 재사용 또는 새로 생성)
+                if existing_scaler:
+                    scaler = existing_scaler
+                    X_scaled = scaler.transform(X)  # 기존 스케일러로 변환만
+                    print(f"   🔄 기존 스케일러 재사용")
+                else:
+                    scaler = RobustScaler()  # 아웃라이어에 강건한 스케일러
+                    X_scaled = scaler.fit_transform(X)
+                    print(f"   🆕 새 스케일러 생성")
                 
-                # 앙상블 모델 생성 (가중치 적용)
-                rf_model = RandomForestRegressor(**model_config)
-                gb_model = GradientBoostingRegressor(
-                    n_estimators=model_config.get('n_estimators', 100),
-                    max_depth=model_config.get('max_depth', 10),
-                    random_state=model_config.get('random_state', 42)
-                )
-                
-                ensemble_model = VotingRegressor([
-                    ('rf', rf_model),
-                    ('gb', gb_model)
-                ])
+                # 모델 생성 (기존 모델 활용 또는 새로 생성)
+                if existing_model:
+                    # 기존 모델 재사용 - warm_start 방식으로 증분 학습
+                    ensemble_model = existing_model
+                    
+                    # RandomForest는 n_estimators를 늘려서 증분 학습 효과
+                    for name, estimator in ensemble_model.named_estimators_.items():
+                        if hasattr(estimator, 'n_estimators'):
+                            # 기존 트리 개수에 50% 추가
+                            new_n_estimators = int(estimator.n_estimators * 1.5)
+                            estimator.set_params(n_estimators=new_n_estimators, warm_start=True)
+                    
+                    print(f"   🔄 기존 모델 확장 학습")
+                else:
+                    # 새로운 앙상블 모델 생성
+                    rf_model = RandomForestRegressor(**model_config)
+                    gb_model = GradientBoostingRegressor(
+                        n_estimators=model_config.get('n_estimators', 100),
+                        max_depth=model_config.get('max_depth', 10),
+                        random_state=model_config.get('random_state', 42)
+                    )
+                    
+                    ensemble_model = VotingRegressor([
+                        ('rf', rf_model),
+                        ('gb', gb_model)
+                    ])
+                    print(f"   🆕 새 앙상블 모델 생성")
                 
                 # 가중치를 적용한 모델 학습
                 print(f"   🏋️ 가중치 적용 모델 학습 중...")
