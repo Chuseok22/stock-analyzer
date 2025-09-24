@@ -683,12 +683,11 @@ class SmartAlertSystem:
                 for i, rec in enumerate(alert.recommendations, 1):
                     message += f"{i}. {rec}\n"
             
-            # Telegram API 호출
+            # Telegram API 호출 (Markdown 파싱 제거)
             url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
             payload = {
                 "chat_id": settings.telegram_chat_id,
-                "text": message,
-                "parse_mode": "Markdown"
+                "text": message.replace("**", "").replace("*", "")  # Markdown 문법 제거
             }
             
             response = requests.post(url, json=payload, timeout=10)

@@ -389,12 +389,11 @@ class NotificationService:
 
       message += "\n⚠️ *투자 위험 알림*: AI 예측 기반이므로 신중한 판단이 필요합니다\\."
 
-      # Send via Telegram API
+      # Send via Telegram API (Markdown 파싱 제거)
       url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
       payload = {
         "chat_id": settings.telegram_chat_id,
-        "text": message,
-        "parse_mode": "MarkdownV2"
+        "text": message.replace("*", "").replace("_", "").replace("\\", "")  # Markdown 문법 제거
       }
 
       response = requests.post(url, json=payload)
